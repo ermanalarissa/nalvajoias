@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="theme-color" content="#9B6A2F" id="metaThemeColor">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="JoiasPro">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css?v=1.0.0">
+  <title>JoiasPro</title>
+</head>
+<body>
+  <div id="splashScreen">
+    <div class="splash-logo" id="splashLogoFallback">◆</div>
+    <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
+    <div class="splash-name" id="splashNome">JoiasPro</div>
+    <div class="splash-version" id="splashVersao">v1.0.0</div>
+    <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
+  </div>
+
+  <div id="loadingOverlay">
+    <div class="spinner"></div>
+    <div id="loadingText">Processando...</div>
+  </div>
+
+  <div id="syncIndicador" title="Sincronizando"></div>
+
+  <div class="modal-overlay login-overlay" id="modalSetupUrl">
+    <div class="modal login-modal">
+      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.0</span></div>
+      <p class="login-subtitle">Configure o back-end para sincronizar os dados entre aparelhos e manter backup das fotos.</p>
+      <div class="form-group">
+        <label>URL do Back-end</label>
+        <input type="url" id="setupUrlApp" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="url">
+      </div>
+      <div id="setupUrlErro" class="login-error"></div>
+      <div class="modal-actions stacked">
+        <button class="btn-action" onclick="salvarURLInicial()">Conectar e puxar dados</button>
+        <button class="btn-outline" onclick="usarSomenteLocal()">Usar somente neste aparelho por enquanto</button>
+      </div>
+      <p class="hint center">A URL pode ser configurada depois em Configurações.</p>
+    </div>
+  </div>
+
+  <div class="modal-overlay login-overlay" id="modalLoginAdmin">
+    <div class="modal login-modal">
+      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.0</span></div>
+      <p class="login-subtitle" id="loginAdminTexto">Escolha o usuário e informe a senha.</p>
+      <div class="form-group">
+        <label>Usuário</label>
+        <select id="loginAdminUsuario"></select>
+      </div>
+      <div class="form-group">
+        <label>Senha</label>
+        <input type="password" id="loginAdminSenha" inputmode="numeric" autocomplete="current-password" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+      </div>
+      <div id="loginAdminErro" class="login-error"></div>
+      <div class="modal-actions">
+        <button id="btnCancelarLoginAdmin" class="btn-cancel" onclick="cancelarTrocaPerfil()" style="display:none">Voltar</button>
+        <button class="btn-action" onclick="entrarAdmin()">Entrar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <header class="app-header">
+      <div class="brand" onclick="voltarInicio()">
+        <div class="brand-mark" id="brandMark">◆</div>
+        <div class="brand-text">
+          <strong id="headerNomeLoja">JoiasPro</strong>
+          <small id="headerSubtitulo">Controle de joias</small>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="round-btn" onclick="abrirPainelResultados()" title="Painel">📊</button>
+        <button class="profile-btn" onclick="abrirMenuPerfil()" title="Perfil"><span>👤</span><span id="perfilAdminNome">Entrar</span></button>
+        <button class="round-btn" onclick="abrirModal('modalPainelUnificado')" title="Menu">⚙️</button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="top-summary" id="topSummary"></section>
+
+      <section class="home-categories" id="homeCategorias"></section>
+
+      <section class="filters">
+        <button class="chip active" id="chipTodos" onclick="setFiltroStatus('todos')">Todos</button>
+        <button class="chip disponível" id="chipDisponivel" onclick="setFiltroStatus('disponível')">Disponíveis</button>
+        <button class="chip reservado" id="chipReservado" onclick="setFiltroStatus('reservado')">Reservados</button>
+        <button class="chip vendido" id="chipVendido" onclick="setFiltroStatus('vendido')">Vendidos</button>
+        <input id="inputBusca" type="search" placeholder="Buscar referência, categoria..." oninput="setBusca(this.value)">
+      </section>
+
+      <section class="active-filter-bar" id="activeFilterBar" style="display:none"></section>
+
+      <section class="scroll-area" id="mainScrollArea">
+        <div class="product-list" id="listaJoias"></div>
+        <div class="empty-state" id="emptyState" style="display:none">
+          <div>◆</div>
+          <strong>Nenhuma joia encontrada</strong>
+          <p>Cadastre uma joia ou ajuste os filtros.</p>
+        </div>
+      </section>
+    </main>
+
+    <button class="fab" onclick="abrirFormularioJoia()" title="Nova joia">＋</button>
+  </div>
+
+  <div class="modal-overlay" id="modalPainelUnificado">
+    <div class="modal menu-modal">
+      <div class="modal-title"><span>Menu</span><button class="icon-btn" onclick="fecharModal('modalPainelUnificado')">✖</button></div>
+      <button class="menu-btn" onclick="abrirFormularioJoia(); fecharModal('modalPainelUnificado')">💍 Cadastrar joia</button>
+      <button class="menu-btn" onclick="abrirClientes(); fecharModal('modalPainelUnificado')">👥 Clientes</button>
+      <button class="menu-btn" onclick="abrirPainelResultados(); fecharModal('modalPainelUnificado')">📊 Painel e relatórios</button>
+      <button class="menu-btn" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
+      <button class="menu-btn" onclick="abrirConfiguracoes(); fecharModal('modalPainelUnificado')">⚙️ Configurações</button>
+      <button class="menu-btn danger" onclick="abrirAvancado(); fecharModal('modalPainelUnificado')">⚠️ Avançado</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalPerfilAdmin" style="z-index:2100">
+    <div class="modal profile-modal">
+      <div class="modal-title"><span>Perfil</span><button class="icon-btn" onclick="fecharModal('modalPerfilAdmin')">✖</button></div>
+      <div class="profile-current">
+        <span class="profile-current-icon">👤</span>
+        <div><small>Perfil conectado</small><strong id="perfilAtualNome">Administrador</strong></div>
+      </div>
+      <div class="modal-actions two">
+        <button class="btn-outline" onclick="abrirTrocaSenhaPerfil(false)">Trocar senha</button>
+        <button class="btn-cancel" onclick="sairPerfilAdmin()">Sair</button>
+      </div>
+      <button class="btn-action full" onclick="trocarPerfilAdmin()">Trocar perfil</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalTrocaSenha" style="z-index:2300">
+    <div class="modal login-modal">
+      <div class="modal-title"><span id="tituloTrocaSenha">Trocar senha</span><button class="icon-btn" id="btnFecharTrocaSenha" onclick="fecharModal('modalTrocaSenha')">✖</button></div>
+      <p class="login-subtitle" id="textoTrocaSenha">Informe a senha atual e escolha uma nova senha numérica.</p>
+      <input type="hidden" id="trocaSenhaObrigatoria" value="false">
+      <div class="form-group"><label>Senha atual</label><input type="password" id="trocaSenhaAtual" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <div class="form-group"><label>Nova senha</label><input type="password" id="trocaSenhaNova" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <div class="form-group"><label>Confirmar nova senha</label><input type="password" id="trocaSenhaNova2" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <div id="trocaSenhaErro" class="login-error"></div>
+      <div class="modal-actions"><button class="btn-cancel" id="btnCancelarTrocaSenha" onclick="fecharModal('modalTrocaSenha')">Cancelar</button><button class="btn-action" onclick="salvarTrocaSenhaPerfil()">Salvar</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalJoiaForm">
+    <div class="modal large-modal">
+      <div class="modal-title"><span id="tituloJoiaForm">Cadastrar joia</span><button class="icon-btn" onclick="fecharModal('modalJoiaForm')">✖</button></div>
+      <input type="hidden" id="joiaId">
+      <div class="photo-picker">
+        <div class="photo-preview" id="previewFotoJoia"><span>📷</span></div>
+        <div>
+          <label class="file-btn">Tirar foto ou escolher imagem<input type="file" id="inputFotoJoia" accept="image/*" capture="environment" onchange="selecionarFotoJoia(event)"></label>
+          <button class="btn-cancel small" type="button" onclick="removerFotoJoia()">Remover foto</button>
+          <p class="hint">A foto é comprimida e salva dentro do backup.</p>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Referência *</label><input type="text" id="joiaReferencia" placeholder="Ex.: ANL-001"></div>
+        <div class="form-group"><label>Categoria *</label><select id="joiaCategoria"></select></div>
+      </div>
+      <div class="form-group"><label>Descrição / nome da peça</label><input type="text" id="joiaDescricao" placeholder="Ex.: Anel solitário ouro 18k"></div>
+      <div class="grid-3">
+        <div class="form-group"><label>Peso em ouro (g)</label><input type="text" id="joiaPeso" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,3)"></div>
+        <div class="form-group"><label>Preço de compra</label><input type="text" id="joiaCompra" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
+        <div class="form-group"><label>Preço de venda</label><input type="text" id="joiaVenda" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Status</label><select id="joiaStatus"><option value="disponível">Disponível</option><option value="reservado">Reservado</option><option value="vendido">Vendido</option></select></div>
+        <div class="form-group"><label>Cliente vinculado</label><select id="joiaCliente"></select></div>
+      </div>
+      <div class="form-group"><label>Observações</label><textarea id="joiaObs" rows="3" placeholder="Detalhes da peça, teor do ouro, tamanho do aro..."></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalJoiaForm')">Cancelar</button><button class="btn-action" onclick="salvarJoiaForm()">Salvar joia</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalJoiaDetalhe">
+    <div class="modal large-modal detail-modal">
+      <div class="modal-title"><span>Detalhes da joia</span><button class="icon-btn" onclick="fecharModal('modalJoiaDetalhe')">✖</button></div>
+      <div id="detalheJoiaConteudo"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalClientes">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>Clientes</span><button class="icon-btn" onclick="fecharModal('modalClientes')">✖</button></div>
+      <div class="toolbar"><input type="search" id="buscaCliente" placeholder="Buscar cliente..." oninput="renderClientes()"><button class="btn-action compact" onclick="abrirFormularioCliente()">＋ Cliente</button></div>
+      <div class="client-list" id="listaClientes"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalClienteForm" style="z-index:2200">
+    <div class="modal">
+      <div class="modal-title"><span id="tituloClienteForm">Cadastrar cliente</span><button class="icon-btn" onclick="fecharModal('modalClienteForm')">✖</button></div>
+      <input type="hidden" id="clienteId">
+      <div class="form-group"><label>Nome completo *</label><input type="text" id="clienteNome" autocomplete="name"></div>
+      <div class="grid-2">
+        <div class="form-group"><label>Telefone</label><input type="tel" id="clienteTelefone" inputmode="tel" oninput="maskTelefone(this)"></div>
+        <div class="form-group"><label>UF</label><select id="clienteUF"></select></div>
+      </div>
+      <div class="form-group"><label>Cidade</label><input type="text" id="clienteCidade"></div>
+      <div class="form-group"><label>Endereço para entrega</label><textarea id="clienteEndereco" rows="3"></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteForm')">Cancelar</button><button class="btn-action" onclick="salvarClienteForm()">Salvar cliente</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalVenda" style="z-index:2200">
+    <div class="modal">
+      <div class="modal-title"><span>Registrar venda</span><button class="icon-btn" onclick="fecharModal('modalVenda')">✖</button></div>
+      <input type="hidden" id="vendaJoiaId">
+      <div class="sale-item-box" id="vendaJoiaResumo"></div>
+      <div class="form-group"><label>Cliente *</label><select id="vendaCliente"></select></div>
+      <button class="btn-outline full" onclick="abrirFormularioCliente('', 'venda')">＋ Cadastrar novo cliente</button>
+      <div class="grid-2 mt12">
+        <div class="form-group"><label>Data da venda</label><input type="date" id="vendaData"></div>
+        <div class="form-group"><label>Valor vendido</label><input type="text" id="vendaValor" inputmode="decimal" oninput="maskMoeda(this)"></div>
+      </div>
+      <div class="form-group"><label>Forma de pagamento</label><input type="text" id="vendaForma" placeholder="Pix, cartão, dinheiro..."></div>
+      <div class="form-group"><label>Observação</label><textarea id="vendaObs" rows="3"></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalVenda')">Cancelar</button><button class="btn-action" onclick="salvarVenda()">Confirmar venda</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalReserva" style="z-index:2200">
+    <div class="modal">
+      <div class="modal-title"><span>Reservar joia</span><button class="icon-btn" onclick="fecharModal('modalReserva')">✖</button></div>
+      <input type="hidden" id="reservaJoiaId">
+      <div class="form-group"><label>Cliente</label><select id="reservaCliente"></select></div>
+      <button class="btn-outline full" onclick="abrirFormularioCliente('', 'reserva')">＋ Cadastrar novo cliente</button>
+      <div class="form-group mt12"><label>Observação da reserva</label><textarea id="reservaObs" rows="3"></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalReserva')">Cancelar</button><button class="btn-action" onclick="salvarReserva()">Reservar</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalPainelResultados">
+    <div class="modal large-modal report-modal">
+      <div class="modal-title"><span>📊 Painel e relatórios</span><button class="icon-btn" onclick="fecharModal('modalPainelResultados')">✖</button></div>
+      <div id="painelResumo"></div>
+      <div class="report-actions">
+        <button class="btn-outline" onclick="exportarCSV('joias')">Exportar joias CSV</button>
+        <button class="btn-outline" onclick="exportarCSV('clientes')">Exportar clientes CSV</button>
+        <button class="btn-outline" onclick="exportarCSV('vendas')">Exportar vendas CSV</button>
+        <button class="btn-action" onclick="exportarDadosBackup()">Backup completo JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalConfiguracoes">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>Configurações</span><button class="icon-btn" onclick="fecharModal('modalConfiguracoes')">✖</button></div>
+      <div class="section-title">Dados da loja</div>
+      <div class="photo-picker compact-photo">
+        <div class="photo-preview small-preview" id="previewLogoLoja"><span>◆</span></div>
+        <label class="file-btn">Alterar logo<input type="file" accept="image/*" onchange="selecionarLogoLoja(event)"></label>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Nome da loja</label><input type="text" id="lojaNome"></div>
+        <div class="form-group"><label>Telefone</label><input type="tel" id="lojaTelefone" oninput="maskTelefone(this)"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Cidade</label><input type="text" id="lojaCidade"></div>
+        <div class="form-group"><label>UF</label><select id="lojaUF"></select></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Cor principal</label><input type="color" id="corTema"></div>
+        <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
+      </div>
+      <div class="sync-box" id="syncInfo"></div>
+      <div class="modal-actions wrap">
+        <button class="btn-outline" onclick="puxarDadosNuvem(false)">Puxar nuvem</button>
+        <button class="btn-outline" onclick="sincronizarFundo(true, false)">Enviar agora</button>
+        <button class="btn-action" onclick="salvarConfiguracoes()">Salvar configurações</button>
+      </div>
+      <div class="section-title">Usuários</div>
+      <div id="listaUsuarios"></div>
+      <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Usuário</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalUsuarioForm" style="z-index:2200">
+    <div class="modal">
+      <div class="modal-title"><span id="tituloUsuarioForm">Usuário</span><button class="icon-btn" onclick="fecharModal('modalUsuarioForm')">✖</button></div>
+      <input type="hidden" id="usuarioId">
+      <div class="form-group"><label>Nome *</label><input type="text" id="usuarioNome"></div>
+      <div class="form-group"><label>Senha numérica *</label><input type="password" id="usuarioSenha" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
+      <label class="check-row"><input type="checkbox" id="usuarioAdmin"> Administrador completo</label>
+      <label class="check-row"><input type="checkbox" id="usuarioForcarTroca"> Forçar troca de senha no próximo acesso</label>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalUsuarioForm')">Cancelar</button><button class="btn-action" onclick="salvarUsuarioForm()">Salvar</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalAuditoria">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>Auditoria</span><button class="icon-btn" onclick="fecharModal('modalAuditoria')">✖</button></div>
+      <input class="full-input" type="search" id="buscaAuditoria" placeholder="Buscar ação, usuário..." oninput="renderAuditoria()">
+      <div class="audit-list" id="listaAuditoria"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalAvancado">
+    <div class="modal">
+      <div class="modal-title"><span>Avançado</span><button class="icon-btn" onclick="fecharModal('modalAvancado')">✖</button></div>
+      <button class="btn-action full" onclick="exportarDadosBackup()">Exportar backup JSON</button>
+      <label class="file-btn full centered mt12">Importar backup JSON<input type="file" accept="application/json,.json" onchange="importarDadosBackup(event)"></label>
+      <button class="btn-outline full mt12" onclick="forcarAtualizacao()">Limpar cache e atualizar app</button>
+      <div class="danger-zone">
+        <strong>Excluir todos os dados deste aparelho</strong>
+        <p>Digite: <b>excluir tudo</b></p>
+        <input type="text" id="inputExcluirTudo" placeholder="excluir tudo">
+        <button class="btn-danger full" onclick="excluirTudoLocal()">Excluir dados locais</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalFoto" style="z-index:2500">
+    <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
+  </div>
+
+  <script src="app.js?v=1.0.0" defer></script>
+</body>
+</html>
