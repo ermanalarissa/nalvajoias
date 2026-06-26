@@ -3,7 +3,7 @@
 PWA para controle de estoque, vendas, clientes, fotos e sincronização de joias.
 
 ## Versão
-v1.0.1
+v1.0.2
 
 ## Senha inicial
 - Usuário: **Administrador**
@@ -17,7 +17,7 @@ v1.0.1
 - Clientes com nome completo, WhatsApp, cidade, UF e endereço de entrega.
 - Registro de venda e reserva.
 - Envio de joia pelo WhatsApp com texto de especificação e geração de imagem/cartão da peça.
-- Painel de resultados com vendas do mês, valor em estoque, custo, margem potencial, ticket médio, giro, gráficos e resumo por categoria.
+- Painel de resultados com seleção de mês, vendas do mês, valor em estoque, custo, margem, ticket médio, giro, gráficos, top clientes e resumo por categoria.
 - Temas visuais pré-definidos para loja de joias.
 - Backup local em JSON, exportação CSV e sincronização por Google Apps Script.
 - Fotos comprimidas com fundo branco para evitar PNG transparente com fundo preto.
@@ -31,7 +31,7 @@ v1.0.1
 1. Crie um projeto no Google Apps Script.
 2. Cole o conteúdo de `backend-google-apps-script.gs`.
 3. Publique como Web App.
-4. Copie a URL `/exec` e cole no app em **Configurações > URL do back-end**.
+4. Copie a URL `/exec` e cole no app em **Configurações > Avançado > URL do back-end**.
 
 ## Observação sobre WhatsApp
 O envio direto de texto usa `wa.me`. Para enviar imagem + texto, o app usa o compartilhamento nativo do celular quando disponível. Em computador, ele baixa uma imagem pronta da joia e abre a conversa do WhatsApp para anexar manualmente.

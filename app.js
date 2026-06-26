@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.0.1";
+const APP_VERSION = "v1.0.2";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 const SYNC_PULL_INTERVAL_MS = 30000;
@@ -7,12 +7,12 @@ const AUDITORIA_RETENCAO_DIAS = 30;
 const CATEGORIAS_PADRAO = [
   { id: "correntaria", nome: "Correntaria", icon: "📿", ordem: 1 },
   { id: "pulseiras", nome: "Pulseiras", icon: "⛓", ordem: 2 },
-  { id: "brincos", nome: "Brincos", icon: "💎", ordem: 3 },
+  { id: "brincos", nome: "Brincos", icon: "💠", ordem: 3 },
   { id: "argolas", nome: "Argolas", icon: "⍥⃝⃝", ordem: 4 },
   { id: "pingentes", nome: "Pingentes", icon: "🔶", ordem: 5 },
   { id: "aneis", nome: "Anéis", icon: "💍", ordem: 6 },
   { id: "escapularios", nome: "Escapulários", icon: "♱", ordem: 7 },
-  { id: "aliancas", nome: "Alianças", icon: "🟡", ordem: 8 }
+  { id: "aliancas", nome: "Alianças", icon: "⃝", ordem: 8 }
 ];
 
 const TEMAS_PREDEFINIDOS = [
@@ -40,6 +40,7 @@ function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
 function escapeHTML(valor) { return String(valor ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch])); }
 function getHojeSTR() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function getMesAtualSTR() { return getHojeSTR().slice(0, 7); }
 function formatDataBR(v) { if(!v) return ""; const p = String(v).split("-"); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : v; }
 function formatDateTime(ts) { if(!ts) return ""; return new Date(Number(ts)).toLocaleString("pt-BR"); }
 function gerarIdLocal(prefixo = "id") { if(window.crypto && crypto.randomUUID) return `${prefixo}_${crypto.randomUUID()}`; return `${prefixo}_${Date.now()}_${Math.random().toString(36).slice(2)}`; }
@@ -343,7 +344,7 @@ function renderCabecalho() {
   if(db.loja?.logo) { qs("splashLogoObj").src = db.loja.logo; qs("splashLogoObj").style.display = "block"; qs("splashLogoFallback").style.display = "none"; }
 }
 
-function calcularResumo() {
+function calcularResumo(mesRef = getMesAtualSTR()) {
   const joias = db.joias || [];
   const estoque = joias.filter(j => j.status !== "vendido");
   const disponiveis = joias.filter(j => j.status === "disponível");
@@ -354,14 +355,17 @@ function calcularResumo() {
   const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0), 0);
   const vendas = db.vendas || [];
   const receitaVendida = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
-  const hoje = new Date();
-  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,"0")}`;
-  const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesAtual);
+  const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
   const receitaMes = vendasMes.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
   const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0); }, 0);
+  const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0); }, 0);
   const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
   const margemRealMes = receitaMes - custoVendidoMes;
-  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, receitaMes, ticketMedioMes, margemRealMes, mesAtual };
+  const mesAnterior = deslocarMes(mesRef, -1);
+  const vendasMesAnterior = vendas.filter(v => String(v.data || "").slice(0,7) === mesAnterior);
+  const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const variacaoMes = receitaMesAnterior ? ((receitaMes - receitaMesAnterior) / receitaMesAnterior) * 100 : (receitaMes ? 100 : 0);
+  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
 }
 
 function renderResumoTopo() {
@@ -608,6 +612,11 @@ function abrirDetalheJoia(id) {
 function getNumeroWhatsappCliente(cliente) {
   return String(cliente?.telefone || "").replace(/\D/g, "").replace(/^0+/, "");
 }
+function normalizarTelefoneWhatsapp(valor) {
+  let tel = String(valor || "").replace(/\D/g, "").replace(/^0+/, "");
+  if(tel && tel.length <= 11 && !tel.startsWith("55")) tel = "55" + tel;
+  return tel;
+}
 function getMensagemJoia(j) {
   const cat = getCategoria(j.categoria);
   const nomeLoja = db.loja?.nome || "JoiasPro";
@@ -626,14 +635,23 @@ function atualizarTelefoneSharePorCliente() {
   const c = getCliente(qs("shareCliente").value);
   qs("shareTelefoneManual").value = c?.telefone || "";
 }
-function abrirWhatsappTexto() {
-  const j = getJoia(qs("shareJoiaId").value); if(!j) return;
-  let tel = String(qs("shareTelefoneManual").value || getCliente(qs("shareCliente").value)?.telefone || "").replace(/\D/g, "");
-  if(tel && tel.length <= 11 && !tel.startsWith("55")) tel = "55" + tel;
-  const texto = encodeURIComponent(qs("shareMensagem").value || getMensagemJoia(j));
-  const url = tel ? `https://wa.me/${tel}?text=${texto}` : `https://wa.me/?text=${texto}`;
-  window.open(url, "_blank");
+function getDestinoWhatsappShare() {
+  const j = getJoia(qs("shareJoiaId").value); if(!j) return null;
+  const cliente = getCliente(qs("shareCliente").value);
+  const tel = normalizarTelefoneWhatsapp(qs("shareTelefoneManual").value || cliente?.telefone || "");
+  const texto = qs("shareMensagem").value || getMensagemJoia(j);
+  const url = tel ? `https://wa.me/${tel}?text=${encodeURIComponent(texto)}` : `https://wa.me/?text=${encodeURIComponent(texto)}`;
+  return { j, cliente, tel, texto, url };
 }
+async function copiarTextoCompartilhamento(texto) {
+  try { if(navigator.clipboard) await navigator.clipboard.writeText(texto); } catch(e) {}
+}
+function abrirWhatsappTexto() {
+  const alvo = getDestinoWhatsappShare(); if(!alvo) return;
+  if(!alvo.tel && !confirm("Nenhum WhatsApp foi informado. Abrir o WhatsApp sem destinatário?")) return;
+  window.open(alvo.url, "_blank");
+}
+
 async function gerarCartaoJoiaBlob(j) {
   const cat = getCategoria(j.categoria);
   const canvas = document.createElement("canvas");
@@ -698,24 +716,28 @@ function drawImageCover(ctx, img, x, y, w, h, r = 0) {
   ctx.restore();
 }
 async function compartilharJoiaImagemWhatsapp() {
-  const j = getJoia(qs("shareJoiaId").value); if(!j) return;
+  const alvo = getDestinoWhatsappShare(); if(!alvo) return;
+  if(!alvo.tel && !confirm("Nenhum WhatsApp foi informado. Gerar a imagem mesmo assim?")) return;
   setLoading(true, "Gerando imagem da joia...");
   try {
-    const blob = await gerarCartaoJoiaBlob(j);
-    const file = new File([blob], `${normalizarTextoId(j.referencia || "joia")}.jpg`, { type: "image/jpeg" });
-    const texto = qs("shareMensagem").value || getMensagemJoia(j);
+    const blob = await gerarCartaoJoiaBlob(alvo.j);
+    const file = new File([blob], `${normalizarTextoId(alvo.j.referencia || "joia")}.jpg`, { type: "image/jpeg" });
+    await copiarTextoCompartilhamento(alvo.texto);
     if(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-      await navigator.share({ files: [file], text: texto, title: j.descricao || j.referencia || "Joia" });
+      await navigator.share({ files: [file], text: alvo.texto, title: alvo.j.descricao || alvo.j.referencia || "Joia" });
+      if(alvo.tel) setTimeout(() => window.open(alvo.url, "_blank"), 250);
     } else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = file.name;
       document.body.appendChild(a); a.click(); a.remove();
-      alert("A imagem foi baixada. Agora o WhatsApp será aberto com a mensagem para você anexar a imagem, se desejar.");
-      abrirWhatsappTexto();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      alert("A imagem da joia foi gerada. Vou abrir a conversa do cliente selecionado com o texto pronto. Anexe a imagem baixada, se o WhatsApp não anexar automaticamente.");
+      window.open(alvo.url, "_blank");
     }
   } finally { setLoading(false); }
 }
+
 
 function abrirFotoGrande(id) { const j = getJoia(id); if(j && j.foto) { qs("fotoGrande").src = j.foto; abrirModal("modalFoto"); } }
 
@@ -886,50 +908,92 @@ function voltarJoiaEstoque(joiaId) {
   renderTudo();
 }
 
-function getUltimosMeses(qtd = 6) {
+function deslocarMes(mesRef, delta) {
+  const [ano, mes] = String(mesRef || getMesAtualSTR()).split("-").map(Number);
+  const d = new Date(ano, (mes || 1) - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+}
+function getUltimosMeses(qtd = 6, mesFinal = getMesAtualSTR()) {
   const out = [];
-  const d = new Date();
-  d.setDate(1);
-  for(let i = qtd - 1; i >= 0; i--) {
-    const x = new Date(d);
-    x.setMonth(d.getMonth() - i);
-    out.push(`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}`);
-  }
+  for(let i = qtd - 1; i >= 0; i--) out.push(deslocarMes(mesFinal, -i));
   return out;
 }
+function nomeMesLongo(mesRef) {
+  const nomes = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+  const [ano, mes] = String(mesRef || getMesAtualSTR()).split("-").map(Number);
+  return `${nomes[(mes || 1)-1]} de ${ano}`;
+}
+
 function labelMesCurto(mesRef) {
   const nomes = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
   const [ano, mes] = String(mesRef).split("-").map(Number);
   return `${nomes[(mes || 1)-1]}/${String(ano).slice(2)}`;
 }
 
-function abrirPainelResultados() { renderPainelResultados(); abrirModal("modalPainelResultados"); }
+function getMesPainelSelecionado() {
+  const input = qs("painelMes");
+  if(input && input.value) return input.value;
+  return getMesAtualSTR();
+}
+function abrirPainelResultados() {
+  const input = qs("painelMes");
+  if(input && !input.value) input.value = getMesAtualSTR();
+  renderPainelResultados();
+  abrirModal("modalPainelResultados");
+}
+function mudarMesPainel(delta) {
+  const input = qs("painelMes");
+  if(!input) return;
+  input.value = deslocarMes(input.value || getMesAtualSTR(), delta);
+  renderPainelResultados();
+}
 function renderPainelResultados() {
-  const r = calcularResumo();
+  const mesRef = getMesPainelSelecionado();
+  const r = calcularResumo(mesRef);
   const vendas = [...(db.vendas || [])].sort((a,b)=>String(b.data).localeCompare(String(a.data)));
-  const meses = getUltimosMeses(6);
-  const vendasPorMes = meses.map(m => ({ mes: m, label: labelMesCurto(m), valor: vendas.filter(v => String(v.data || "").slice(0,7) === m).reduce((s,v) => s + Number(v.valorVenda || 0), 0), qtd: vendas.filter(v => String(v.data || "").slice(0,7) === m).length }));
+  const vendasMesLista = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
+  const meses = getUltimosMeses(6, mesRef);
+  const vendasPorMes = meses.map(m => {
+    const lista = vendas.filter(v => String(v.data || "").slice(0,7) === m);
+    return { mes: m, label: labelMesCurto(m), valor: lista.reduce((s,v) => s + Number(v.valorVenda || 0), 0), qtd: lista.length };
+  });
   const maxMes = Math.max(1, ...vendasPorMes.map(x => x.valor));
   const porCatEstoque = (db.categorias || []).map(cat => {
     const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido");
-    const vendidos = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
-    return { cat, qtd: itens.length, vendidos: vendidos.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra: itens.reduce((s,j) => s + Number(j.precoCompra||0),0), venda: itens.reduce((s,j) => s + Number(j.precoVenda||0),0), receita: vendidos.reduce((s,v)=>s + Number(v.valorVenda||0),0) };
+    const vendidosMes = vendasMesLista.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
+    const vendidosTotal = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
+    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0),0);
+    const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0),0);
+    const receitaMes = vendidosMes.reduce((s,v)=>s + Number(v.valorVenda||0),0);
+    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0),0);
+    return { cat, qtd: itens.length, vendidosMes: vendidosMes.length, vendidosTotal: vendidosTotal.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra, venda, receitaMes, custoMes };
   });
   const maxCatVenda = Math.max(1, ...porCatEstoque.map(x => x.venda));
+  const maxCatReceitaMes = Math.max(1, ...porCatEstoque.map(x => x.receitaMes));
   const giro = r.total ? Math.round((r.vendidas / r.total) * 100) : 0;
-  const margemPct = r.vendaEstoque ? ((r.margemPotencial / r.vendaEstoque) * 100) : 0;
+  const margemPct = r.receitaMes ? ((r.margemRealMes / r.receitaMes) * 100) : 0;
+  const variacaoLabel = `${r.variacaoMes >= 0 ? "+" : ""}${formatDecimal(r.variacaoMes,1)}%`;
+  const clientesMes = Object.values(vendasMesLista.reduce((acc, v) => {
+    const id = v.clienteId || "sem_cliente";
+    const cli = getCliente(v.clienteId);
+    acc[id] = acc[id] || { nome: cli?.nomeCompleto || "Cliente não localizado", qtd: 0, valor: 0 };
+    acc[id].qtd += 1; acc[id].valor += Number(v.valorVenda || 0);
+    return acc;
+  }, {})).sort((a,b)=>b.valor-a.valor).slice(0,5);
   qs("painelResumo").innerHTML = `
-    <div class="report-hero">
+    <div class="report-month-title">Consulta de ${escapeHTML(nomeMesLongo(mesRef))}</div>
+    <div class="report-hero report-hero-3">
+      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.vendasMesQtd} peça(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
+      <div><small>Margem do mês</small><strong>${formatMoeda(r.margemRealMes)}</strong><em>${formatDecimal(margemPct,1)}% sobre vendas · custo ${formatMoeda(r.custoVendidoMes)}</em></div>
       <div><small>Valor de venda em estoque</small><strong>${formatMoeda(r.vendaEstoque)}</strong><em>${r.estoque} peças · ${formatDecimal(r.pesoEstoque,3)} g de ouro</em></div>
-      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.vendasMesQtd} venda(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
     </div>
     <div class="report-grid wide">
+      <div class="report-card"><small>Peças vendidas</small><strong>${r.vendasMesQtd}</strong><em>${formatDecimal(r.pesoVendidoMes,3)} g vendidos no mês</em></div>
       <div class="report-card"><small>Disponíveis</small><strong>${r.disponiveis}</strong><em>prontas para venda</em></div>
       <div class="report-card"><small>Reservadas</small><strong>${r.reservadas}</strong><em>com cliente vinculado</em></div>
-      <div class="report-card"><small>Vendidas</small><strong>${r.vendidas}</strong><em>${formatMoeda(r.receitaVendida)} total</em></div>
       <div class="report-card"><small>Custo em estoque</small><strong>${formatMoeda(r.custoEstoque)}</strong><em>margem pot. ${formatMoeda(r.margemPotencial)}</em></div>
-      <div class="report-card"><small>Margem potencial</small><strong>${formatDecimal(margemPct,1)}%</strong><em>sobre venda estoque</em></div>
-      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / total</em></div>
+      <div class="report-card"><small>Comparação mês anterior</small><strong>${variacaoLabel}</strong><em>mês anterior ${formatMoeda(r.receitaMesAnterior)}</em></div>
+      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / total cadastrado</em></div>
     </div>
     <div class="charts-grid">
       <div class="chart-card">
@@ -944,18 +1008,29 @@ function renderPainelResultados() {
           ${porCatEstoque.map(x => `<div class="hbar-row"><span>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</span><div><i style="width:${Math.max(3, Math.round((x.venda/maxCatVenda)*100))}%"></i></div><b>${formatMoeda(x.venda)}</b></div>`).join("")}
         </div>
       </div>
+      <div class="chart-card">
+        <div class="section-title">Vendas do mês por categoria</div>
+        <div class="bar-chart">
+          ${porCatEstoque.map(x => `<div class="hbar-row"><span>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</span><div><i style="width:${Math.max(3, Math.round((x.receitaMes/maxCatReceitaMes)*100))}%"></i></div><b>${formatMoeda(x.receitaMes)}</b></div>`).join("")}
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="section-title">Top clientes do mês</div>
+        ${clientesMes.length ? clientesMes.map(c => `<div class="ranking-row"><span>${escapeHTML(c.nome)}</span><strong>${formatMoeda(c.valor)}</strong><small>${c.qtd} venda(s)</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
+      </div>
     </div>
     <div class="section-title">Resumo por categoria</div>
-    <div class="table-wrap"><table><thead><tr><th>Categoria</th><th>Estoque</th><th>Vendidas</th><th>Peso</th><th>Custo</th><th>Venda est.</th><th>Margem pot.</th></tr></thead><tbody>
-      ${porCatEstoque.map(x => `<tr><td>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</td><td>${x.qtd}</td><td>${x.vendidos}</td><td>${formatDecimal(x.peso,3)} g</td><td>${formatMoeda(x.compra)}</td><td>${formatMoeda(x.venda)}</td><td>${formatMoeda(x.venda - x.compra)}</td></tr>`).join("")}
+    <div class="table-wrap"><table><thead><tr><th>Categoria</th><th>Estoque</th><th>Vend. mês</th><th>Receita mês</th><th>Peso estoque</th><th>Custo est.</th><th>Venda est.</th><th>Margem pot.</th></tr></thead><tbody>
+      ${porCatEstoque.map(x => `<tr><td>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</td><td>${x.qtd}</td><td>${x.vendidosMes}</td><td>${formatMoeda(x.receitaMes)}</td><td>${formatDecimal(x.peso,3)} g</td><td>${formatMoeda(x.compra)}</td><td>${formatMoeda(x.venda)}</td><td>${formatMoeda(x.venda - x.compra)}</td></tr>`).join("")}
     </tbody></table></div>
-    <div class="section-title">Últimas vendas</div>
-    ${vendas.slice(0,12).map(v => {
+    <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
+    ${vendasMesLista.map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
       return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
-    }).join("") || `<p class="hint">Nenhuma venda registrada ainda.</p>`}
+    }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
+
 function getTemaSelecionado() {
   const id = qs("temaSelecionado")?.value || db.configGerais?.temaId || "ouro_classico";
   return TEMAS_PREDEFINIDOS.find(t => t.id === id) || TEMAS_PREDEFINIDOS[0];
@@ -977,43 +1052,57 @@ function renderTemasPredefinidos() {
   box.innerHTML = TEMAS_PREDEFINIDOS.map(t => `<button type="button" class="theme-option ${t.id === atual ? "active" : ""}" data-theme="${escapeHTML(t.id)}" onclick="escolherTema('${escapeHTML(t.id)}')"><span style="background:${escapeHTML(t.cor)}"></span><strong>${escapeHTML(t.nome)}</strong></button>`).join("");
 }
 
-function abrirConfiguracoes() {
+function abrirDadosLoja() {
   qs("lojaNome").value = db.loja.nome || "";
   qs("lojaTelefone").value = db.loja.telefone || "";
   qs("lojaCidade").value = db.loja.cidade || "";
   preencherUFSelect("lojaUF", db.loja.uf || "PB");
-  renderTemasPredefinidos();
-  qs("configUrlApp").value = db.configs.url || "";
   logoLojaTemp = db.loja.logo || "";
   renderPreviewLogoLoja();
-  renderUsuarios();
-  renderSyncInfo();
   abrirModal("modalConfiguracoes");
 }
-
+function abrirConfiguracoes() { abrirDadosLoja(); }
+function abrirTemaVisual() {
+  renderTemasPredefinidos();
+  abrirModal("modalTemaVisual");
+}
 function renderPreviewLogoLoja() { qs("previewLogoLoja").innerHTML = logoLojaTemp ? `<img src="${logoLojaTemp}" alt="Logo">` : `<span>◆</span>`; }
 async function selecionarLogoLoja(event) { const file = event.target.files && event.target.files[0]; if(!file) return; setLoading(true, "Comprimindo logo..."); try { logoLojaTemp = await comprimirImagem(file, 512, .86); renderPreviewLogoLoja(); } finally { setLoading(false); } }
 
-function salvarConfiguracoes() {
+function salvarDadosLoja() {
   db.loja.nome = qs("lojaNome").value.trim() || "JoiasPro";
   db.loja.telefone = qs("lojaTelefone").value.trim();
   db.loja.cidade = qs("lojaCidade").value.trim();
   db.loja.uf = qs("lojaUF").value;
   db.loja.logo = logoLojaTemp || "";
+  tocarRegistro(db.loja);
+  registrarAuditoria("Dados da loja alterados", "Nome, contato, cidade ou logo da loja foram atualizados.");
+  salvarBanco();
+  renderTudo();
+  fecharModal("modalConfiguracoes");
+  alert("Dados da loja salvos.");
+}
+function salvarTemaVisual() {
   const tema = getTemaSelecionado();
   db.configGerais.temaId = tema.id;
   db.configGerais.corTema = tema.cor;
   db.configGerais.corSubHeader = tema.sub;
+  tocarRegistro(db.configGerais);
+  registrarAuditoria("Tema visual alterado", tema.nome);
+  salvarBanco();
+  renderTudo();
+  fecharModal("modalTemaVisual");
+  alert("Tema salvo.");
+}
+function salvarConfigAvancada() {
   db.configs.url = qs("configUrlApp").value.trim();
   db.configs.somenteLocal = !db.configs.url;
-  tocarRegistro(db.loja);
-  tocarRegistro(db.configGerais);
-  registrarAuditoria("Configurações alteradas", "Dados da loja e sincronização foram atualizados.");
+  registrarAuditoria("Configuração de sincronização alterada", db.configs.url ? "Back-end configurado." : "Uso local sem back-end.");
   salvarBanco();
   renderSyncInfo();
-  renderTudo();
-  alert("Configurações salvas.");
+  alert("Configuração avançada salva.");
 }
+function salvarConfiguracoes() { salvarDadosLoja(); }
 
 function renderSyncInfo() {
   const status = db.configs.url ? "Sincronização configurada" : "Somente local";
@@ -1079,7 +1168,7 @@ function renderAuditoria() {
   qs("listaAuditoria").innerHTML = lista.length ? lista.map(a => `<div class="audit-card"><strong>${escapeHTML(a.acao)}</strong><small>${formatDateTime(a.createdAt)} · ${escapeHTML(a.usuario || "Sistema")}</small><p>${escapeHTML(a.detalhes || "")}</p></div>`).join("") : `<p class="hint">Sem registros de auditoria.</p>`;
 }
 
-function abrirAvancado() { abrirModal("modalAvancado"); }
+function abrirAvancado() { qs("configUrlApp").value = db.configs.url || ""; renderSyncInfo(); renderUsuarios(); abrirModal("modalAvancado"); }
 
 function exportarDadosBackup() {
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(db, null, 2));

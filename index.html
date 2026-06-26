@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v1.0.1</div>
+    <div class="splash-version" id="splashVersao">v1.0.2</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -34,7 +34,7 @@
 
   <div class="modal-overlay login-overlay" id="modalSetupUrl">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.1</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.2</span></div>
       <p class="login-subtitle">Configure o back-end para sincronizar os dados entre aparelhos e manter backup das fotos.</p>
       <div class="form-group">
         <label>URL do Back-end</label>
@@ -45,13 +45,13 @@
         <button class="btn-action" onclick="salvarURLInicial()">Conectar e puxar dados</button>
         <button class="btn-outline" onclick="usarSomenteLocal()">Usar somente neste aparelho por enquanto</button>
       </div>
-      <p class="hint center">A URL pode ser configurada depois em Configurações.</p>
+      <p class="hint center">A URL pode ser configurada depois em Avançado.</p>
     </div>
   </div>
 
   <div class="modal-overlay login-overlay" id="modalLoginAdmin">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.1</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.2</span></div>
       <p class="login-subtitle" id="loginAdminTexto">Escolha o usuário e informe a senha.</p>
       <div class="form-group">
         <label>Usuário</label>
@@ -81,7 +81,7 @@
       <div class="header-actions">
         <button class="round-btn" onclick="abrirPainelResultados()" title="Painel">📊</button>
         <button class="profile-btn" onclick="abrirMenuPerfil()" title="Perfil"><span>👤</span><span id="perfilAdminNome">Entrar</span></button>
-        <button class="round-btn" onclick="abrirModal('modalPainelUnificado')" title="Menu">⚙️</button>
+        <button class="round-btn" onclick="abrirModal('modalPainelUnificado')" title="Configurações">⚙️</button>
       </div>
     </header>
 
@@ -113,12 +113,12 @@
 
   <div class="modal-overlay" id="modalPainelUnificado">
     <div class="modal menu-modal">
-      <div class="modal-title"><span>Menu</span><button class="icon-btn" onclick="fecharModal('modalPainelUnificado')">✖</button></div>
+      <div class="modal-title"><span>Configurações</span><button class="icon-btn" onclick="fecharModal('modalPainelUnificado')">✖</button></div>
       <button class="menu-btn" onclick="abrirFormularioJoia(); fecharModal('modalPainelUnificado')">💍 Cadastrar joia</button>
       <button class="menu-btn" onclick="abrirClientes(); fecharModal('modalPainelUnificado')">👥 Clientes</button>
-      <button class="menu-btn" onclick="abrirPainelResultados(); fecharModal('modalPainelUnificado')">📊 Painel e relatórios</button>
+      <button class="menu-btn" onclick="abrirDadosLoja(); fecharModal('modalPainelUnificado')">🏬 Dados da loja</button>
+      <button class="menu-btn" onclick="abrirTemaVisual(); fecharModal('modalPainelUnificado')">🎨 Tema visual</button>
       <button class="menu-btn" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
-      <button class="menu-btn" onclick="abrirConfiguracoes(); fecharModal('modalPainelUnificado')">⚙️ Configurações</button>
       <button class="menu-btn danger" onclick="abrirAvancado(); fecharModal('modalPainelUnificado')">⚠️ Avançado</button>
     </div>
   </div>
@@ -126,15 +126,15 @@
   <div class="modal-overlay" id="modalPerfilAdmin" style="z-index:2100">
     <div class="modal profile-modal">
       <div class="modal-title"><span>Perfil</span><button class="icon-btn" onclick="fecharModal('modalPerfilAdmin')">✖</button></div>
-      <div class="profile-current">
+      <div class="profile-current profile-current-clean">
         <span class="profile-current-icon">👤</span>
-        <div><small>Perfil conectado</small><strong id="perfilAtualNome">Administrador</strong></div>
+        <strong id="perfilAtualNome">Administrador</strong>
       </div>
       <div class="modal-actions two">
         <button class="btn-outline" onclick="abrirTrocaSenhaPerfil(false)">Trocar senha</button>
         <button class="btn-cancel" onclick="sairPerfilAdmin()">Sair</button>
       </div>
-      <button class="btn-action full" onclick="trocarPerfilAdmin()">Trocar perfil</button>
+      <button class="btn-action full profile-switch-full" onclick="trocarPerfilAdmin()">Trocar perfil</button>
     </div>
   </div>
 
@@ -243,6 +243,11 @@
   <div class="modal-overlay" id="modalPainelResultados">
     <div class="modal large-modal report-modal">
       <div class="modal-title"><span>📊 Painel e relatórios</span><button class="icon-btn" onclick="fecharModal('modalPainelResultados')">✖</button></div>
+      <div class="panel-toolbar">
+        <button class="btn-outline small" onclick="mudarMesPainel(-1)">‹ mês anterior</button>
+        <div class="form-group panel-month-field"><label>Mês de consulta</label><input type="month" id="painelMes" onchange="renderPainelResultados()"></div>
+        <button class="btn-outline small" onclick="mudarMesPainel(1)">próximo mês ›</button>
+      </div>
       <div id="painelResumo"></div>
       <div class="report-actions">
         <button class="btn-outline" onclick="exportarCSV('joias')">Exportar joias CSV</button>
@@ -255,8 +260,7 @@
 
   <div class="modal-overlay" id="modalConfiguracoes">
     <div class="modal large-modal">
-      <div class="modal-title"><span>Configurações</span><button class="icon-btn" onclick="fecharModal('modalConfiguracoes')">✖</button></div>
-      <div class="section-title">Dados da loja</div>
+      <div class="modal-title"><span>Dados da loja</span><button class="icon-btn" onclick="fecharModal('modalConfiguracoes')">✖</button></div>
       <div class="photo-picker compact-photo">
         <div class="photo-preview small-preview" id="previewLogoLoja"><span>◆</span></div>
         <label class="file-btn">Alterar logo<input type="file" accept="image/*" onchange="selecionarLogoLoja(event)"></label>
@@ -269,19 +273,23 @@
         <div class="form-group"><label>Cidade</label><input type="text" id="lojaCidade"></div>
         <div class="form-group"><label>UF</label><select id="lojaUF"></select></div>
       </div>
-      <div class="section-title">Tema visual</div>
+      <div class="modal-actions wrap">
+        <button class="btn-cancel" onclick="fecharModal('modalConfiguracoes')">Cancelar</button>
+        <button class="btn-action" onclick="salvarDadosLoja()">Salvar dados da loja</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalTemaVisual">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>Tema visual</span><button class="icon-btn" onclick="fecharModal('modalTemaVisual')">✖</button></div>
+      <p class="hint">Escolha um tema pré-definido para deixar o app com aparência de loja de joias.</p>
       <input type="hidden" id="temaSelecionado">
       <div class="theme-options" id="temasPredefinidos"></div>
-      <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
-      <div class="sync-box" id="syncInfo"></div>
       <div class="modal-actions wrap">
-        <button class="btn-outline" onclick="puxarDadosNuvem(false)">Puxar nuvem</button>
-        <button class="btn-outline" onclick="sincronizarFundo(true, false)">Enviar agora</button>
-        <button class="btn-action" onclick="salvarConfiguracoes()">Salvar configurações</button>
+        <button class="btn-cancel" onclick="fecharModal('modalTemaVisual')">Cancelar</button>
+        <button class="btn-action" onclick="salvarTemaVisual()">Salvar tema</button>
       </div>
-      <div class="section-title">Usuários</div>
-      <div id="listaUsuarios"></div>
-      <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Usuário</button>
     </div>
   </div>
 
@@ -306,8 +314,20 @@
   </div>
 
   <div class="modal-overlay" id="modalAvancado">
-    <div class="modal">
+    <div class="modal large-modal">
       <div class="modal-title"><span>Avançado</span><button class="icon-btn" onclick="fecharModal('modalAvancado')">✖</button></div>
+      <div class="section-title">Sincronização e back-end</div>
+      <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
+      <div class="sync-box" id="syncInfo"></div>
+      <div class="modal-actions wrap">
+        <button class="btn-outline" onclick="puxarDadosNuvem(false)">Puxar nuvem</button>
+        <button class="btn-outline" onclick="sincronizarFundo(true, false)">Enviar agora</button>
+        <button class="btn-action" onclick="salvarConfigAvancada()">Salvar URL</button>
+      </div>
+      <div class="section-title">Usuários</div>
+      <div id="listaUsuarios"></div>
+      <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Cadastrar novo usuário</button>
+      <div class="section-title">Backup e manutenção</div>
       <button class="btn-action full" onclick="exportarDadosBackup()">Exportar backup JSON</button>
       <label class="file-btn full centered mt12">Importar backup JSON<input type="file" accept="application/json,.json" onchange="importarDadosBackup(event)"></label>
       <button class="btn-outline full mt12" onclick="forcarAtualizacao()">Limpar cache e atualizar app</button>
@@ -331,10 +351,10 @@
       </div>
       <div class="form-group"><label>Mensagem</label><textarea id="shareMensagem" rows="8"></textarea></div>
       <div class="modal-actions wrap">
-        <button class="btn-outline" onclick="abrirWhatsappTexto()">Enviar texto no WhatsApp</button>
-        <button class="btn-action" onclick="compartilharJoiaImagemWhatsapp()">Compartilhar imagem + texto</button>
+        <button class="btn-outline" onclick="abrirWhatsappTexto()">Enviar texto para o cliente</button>
+        <button class="btn-action" onclick="compartilharJoiaImagemWhatsapp()">Enviar card + texto</button>
       </div>
-      <p class="hint">No celular, o botão de imagem usa o compartilhamento do aparelho e permite escolher o WhatsApp. No computador, o app baixa uma imagem pronta da joia e abre a mensagem no WhatsApp.</p>
+      <p class="hint">O app usa o número do cliente selecionado. Quando o WhatsApp não permite anexar imagem automaticamente pelo navegador, o app gera/baixa o card e abre a conversa certa com o texto pronto.</p>
     </div>
   </div>
 
