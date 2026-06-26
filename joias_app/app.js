@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.0.3";
+const APP_VERSION = "v1.0.2";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 const SYNC_PULL_INTERVAL_MS = 30000;
@@ -119,10 +119,6 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     j.precoCompra = Number(j.precoCompra || 0);
     j.precoVenda = Number(j.precoVenda || 0);
     j.status = ["disponível","reservado","vendido"].includes(j.status) ? j.status : "disponível";
-    const qtdInformada = Number(j.quantidadeEstoque);
-    j.quantidadeEstoque = Number.isFinite(qtdInformada) ? Math.max(0, Math.floor(qtdInformada)) : (j.status === "vendido" ? 0 : 1);
-    j.quantidadeInicial = Math.max(Number(j.quantidadeInicial || 0), j.quantidadeEstoque, j.status === "vendido" ? 1 : 0);
-    j.dataEntrada = j.dataEntrada || j.dataCadastro || getHojeSTR();
     j.foto = j.foto || "";
     j.updatedAt = Number(j.updatedAt || 0);
   });
@@ -141,7 +137,6 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!v.id) v.id = `venda_${normalizarTextoId(v.joiaId)}_${idx}`;
     v.data = v.data || getHojeSTR();
     v.valorVenda = Number(v.valorVenda || 0);
-    v.quantidade = Math.max(1, Math.floor(Number(v.quantidade || 1)));
     v.updatedAt = Number(v.updatedAt || 0);
   });
 
@@ -351,32 +346,26 @@ function renderCabecalho() {
 
 function calcularResumo(mesRef = getMesAtualSTR()) {
   const joias = db.joias || [];
-  const getQtd = (j) => Math.max(0, Math.floor(Number(j.quantidadeEstoque || 0)));
-  const estoque = joias.filter(j => j.status !== "vendido" && getQtd(j) > 0);
-  const disponiveis = joias.filter(j => j.status === "disponível" && getQtd(j) > 0);
-  const reservadas = joias.filter(j => j.status === "reservado" && getQtd(j) > 0);
-  const vendidasJoias = joias.filter(j => j.status === "vendido" || getQtd(j) === 0);
-  const estoqueQtd = estoque.reduce((s,j) => s + getQtd(j), 0);
-  const disponiveisQtd = disponiveis.reduce((s,j) => s + getQtd(j), 0);
-  const reservadasQtd = reservadas.reduce((s,j) => s + getQtd(j), 0);
-  const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0) * getQtd(j), 0);
-  const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0) * getQtd(j), 0);
-  const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0) * getQtd(j), 0);
+  const estoque = joias.filter(j => j.status !== "vendido");
+  const disponiveis = joias.filter(j => j.status === "disponível");
+  const reservadas = joias.filter(j => j.status === "reservado");
+  const vendidas = joias.filter(j => j.status === "vendido");
+  const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0), 0);
+  const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0), 0);
+  const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0), 0);
   const vendas = db.vendas || [];
   const receitaVendida = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
-  const qtdVendidaTotal = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
   const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
   const receitaMes = vendasMes.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
-  const qtdVendidaMes = vendasMes.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
-  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
-  const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
+  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0); }, 0);
+  const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0); }, 0);
   const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
   const margemRealMes = receitaMes - custoVendidoMes;
   const mesAnterior = deslocarMes(mesRef, -1);
   const vendasMesAnterior = vendas.filter(v => String(v.data || "").slice(0,7) === mesAnterior);
   const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
   const variacaoMes = receitaMesAnterior ? ((receitaMes - receitaMesAnterior) / receitaMesAnterior) * 100 : (receitaMes ? 100 : 0);
-  return { total: joias.length, totalUnidades: estoqueQtd + qtdVendidaTotal, estoque: estoqueQtd, estoqueItens: estoque.length, disponiveis: disponiveisQtd, reservadas: reservadasQtd, vendidas: qtdVendidaTotal, vendidasJoias: vendidasJoias.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, qtdVendidaMes, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
+  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
 }
 
 function renderResumoTopo() {
@@ -444,7 +433,7 @@ function renderLista() {
             <div class="product-title">${escapeHTML(titulo)}</div>
             <span class="status-badge status-${escapeHTML(j.status)}">${escapeHTML(j.status)}</span>
           </div>
-          <div class="product-meta">Ref. ${escapeHTML(j.referencia || "-")} · ${escapeHTML(cat.nome)}<br>${formatDecimal(j.pesoOuro,3)} g de ouro · estoque ${Math.max(0, Number(j.quantidadeEstoque || 0))}${cliente ? ` · ${escapeHTML(cliente.nomeCompleto)}` : ""}</div>
+          <div class="product-meta">Ref. ${escapeHTML(j.referencia || "-")} · ${escapeHTML(cat.nome)}<br>${formatDecimal(j.pesoOuro,3)} g de ouro${cliente ? ` · ${escapeHTML(cliente.nomeCompleto)}` : ""}</div>
           <div class="product-price"><strong>${formatMoeda(j.precoVenda)}</strong><small>${formatDecimal(j.pesoOuro,3)} g</small></div>
         </div>
       </article>`;
@@ -472,7 +461,7 @@ function preencherSelectClientes(selectId, valor = "", incluirVazio = true) {
 
 function abrirFormularioJoia(id = "") {
   preencherSelectCategorias();
-  if(qs("joiaCliente")) preencherSelectClientes("joiaCliente", "", true);
+  preencherSelectClientes("joiaCliente", "", true);
   fotoJoiaTemp = "";
   qs("joiaId").value = id || "";
   qs("inputFotoJoia").value = "";
@@ -485,10 +474,8 @@ function abrirFormularioJoia(id = "") {
     qs("joiaPeso").value = j.pesoOuro ? formatDecimal(j.pesoOuro,3) : "";
     qs("joiaCompra").value = j.precoCompra ? formatMoedaSem(j.precoCompra) : "";
     qs("joiaVenda").value = j.precoVenda ? formatMoedaSem(j.precoVenda) : "";
-    qs("joiaQuantidade").value = Math.max(0, Number(j.quantidadeEstoque || 0));
-    qs("joiaDataEntrada").value = j.dataEntrada || j.dataCadastro || getHojeSTR();
     qs("joiaStatus").value = j.status || "disponível";
-    if(qs("joiaCliente")) preencherSelectClientes("joiaCliente", j.clienteId || "", true);
+    preencherSelectClientes("joiaCliente", j.clienteId || "", true);
     qs("joiaObs").value = j.obs || "";
     fotoJoiaTemp = j.foto || "";
   } else {
@@ -499,10 +486,8 @@ function abrirFormularioJoia(id = "") {
     qs("joiaPeso").value = "";
     qs("joiaCompra").value = "";
     qs("joiaVenda").value = "";
-    qs("joiaQuantidade").value = "1";
-    qs("joiaDataEntrada").value = getHojeSTR();
     qs("joiaStatus").value = "disponível";
-    if(qs("joiaCliente")) qs("joiaCliente").value = "";
+    qs("joiaCliente").value = "";
     qs("joiaObs").value = "";
   }
   atualizarPreviewFotoJoia();
@@ -556,10 +541,11 @@ function salvarJoiaForm() {
   const categoria = qs("joiaCategoria").value;
   if(!referencia) return alert("Informe a referência da joia.");
   if(!categoria) return alert("Selecione a categoria.");
-  let status = qs("joiaStatus").value;
-  let quantidadeEstoque = Math.max(0, Math.floor(Number(qs("joiaQuantidade").value || 0)));
-  if(status === "vendido") quantidadeEstoque = 0;
-  if(quantidadeEstoque <= 0) status = "vendido";
+  const status = qs("joiaStatus").value;
+  const clienteId = qs("joiaCliente").value;
+  if((status === "vendido" || status === "reservado") && !clienteId) {
+    if(!confirm("A joia está sem cliente vinculado. Deseja salvar mesmo assim?")) return;
+  }
   let joia = id ? getJoia(id) : null;
   const nova = !joia;
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
@@ -570,10 +556,8 @@ function salvarJoiaForm() {
     pesoOuro: parseDecimal(qs("joiaPeso").value),
     precoCompra: parseMoeda(qs("joiaCompra").value),
     precoVenda: parseMoeda(qs("joiaVenda").value),
-    quantidadeEstoque,
-    quantidadeInicial: Math.max(Number(joia.quantidadeInicial || 0), quantidadeEstoque),
-    dataEntrada: qs("joiaDataEntrada").value || getHojeSTR(),
     status,
+    clienteId,
     obs: qs("joiaObs").value.trim(),
     foto: fotoJoiaTemp || ""
   });
@@ -604,21 +588,19 @@ function abrirDetalheJoia(id) {
       </div>
     </div>
     <div class="detail-grid">
-      <div class="detail-box"><small>Estoque</small><strong>${Math.max(0, Number(j.quantidadeEstoque || 0))}</strong></div>
       <div class="detail-box"><small>Peso ouro</small><strong>${formatDecimal(j.pesoOuro,3)} g</strong></div>
       <div class="detail-box"><small>Compra</small><strong>${formatMoeda(j.precoCompra)}</strong></div>
       <div class="detail-box"><small>Venda</small><strong>${formatMoeda(j.precoVenda)}</strong></div>
-      <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>
-      <div class="detail-box"><small>Entrada</small><strong>${formatDataBR(j.dataEntrada || j.dataCadastro)}</strong></div>
+      <div class="detail-box"><small>Margem</small><strong>${formatMoeda(lucro)}</strong></div>
       <div class="detail-box"><small>Cadastro</small><strong>${formatDataBR(j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Atualizado</small><strong>${formatDateTime(j.updatedAt)}</strong></div>
     </div>
-    ${vendas.length ? `<div class="section-title">Histórico de venda deste item</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : `<div class="section-title">Histórico de venda deste item</div><p class="hint">Nenhuma venda registrada para este item.</p>`}
+    ${vendas.length ? `<div class="section-title">Histórico de venda</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : ""}
     <div class="detail-actions">
       <button class="btn-outline" onclick="fecharModal('modalJoiaDetalhe'); abrirFormularioJoia('${escapeHTML(j.id)}')">Editar</button>
       <button class="btn-outline" onclick="duplicarJoia('${escapeHTML(j.id)}')">Duplicar</button>
       <button class="btn-outline" onclick="abrirCompartilharJoia('${escapeHTML(j.id)}')">Enviar WhatsApp</button>
-      ${Math.max(0, Number(j.quantidadeEstoque || 0)) > 0 ? `<button class="btn-action" onclick="abrirVenda('${escapeHTML(j.id)}')">Registrar venda</button>` : `<button class="btn-action" onclick="voltarJoiaEstoque('${escapeHTML(j.id)}')">Voltar ao estoque</button>`}
+      ${j.status !== "vendido" ? `<button class="btn-action" onclick="abrirVenda('${escapeHTML(j.id)}')">Registrar venda</button>` : `<button class="btn-action" onclick="voltarJoiaEstoque('${escapeHTML(j.id)}')">Voltar ao estoque</button>`}
       ${j.status !== "reservado" && j.status !== "vendido" ? `<button class="btn-outline" onclick="abrirReserva('${escapeHTML(j.id)}')">Reservar</button>` : `<button class="btn-outline" onclick="liberarReserva('${escapeHTML(j.id)}')">Liberar reserva</button>`}
       <button class="btn-danger full-row" onclick="excluirJoia('${escapeHTML(j.id)}')">Excluir joia</button>
     </div>
@@ -736,41 +718,32 @@ function drawImageCover(ctx, img, x, y, w, h, r = 0) {
 async function compartilharJoiaImagemWhatsapp() {
   const alvo = getDestinoWhatsappShare(); if(!alvo) return;
   if(!alvo.tel && !confirm("Nenhum WhatsApp foi informado. Gerar a imagem mesmo assim?")) return;
-  setLoading(true, "Gerando card da joia...");
+  setLoading(true, "Gerando imagem da joia...");
   try {
     const blob = await gerarCartaoJoiaBlob(alvo.j);
     const file = new File([blob], `${normalizarTextoId(alvo.j.referencia || "joia")}.jpg`, { type: "image/jpeg" });
     await copiarTextoCompartilhamento(alvo.texto);
-    if(alvo.tel) {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = file.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1200);
-      alert("O card da joia foi gerado e o texto foi copiado. Vou abrir a conversa do número informado. Pelo navegador, o WhatsApp não permite anexar imagem automaticamente para um número específico. Anexe o card baixado nessa conversa.");
-      window.open(alvo.url, "_blank");
-      return;
-    }
     if(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
       await navigator.share({ files: [file], text: alvo.texto, title: alvo.j.descricao || alvo.j.referencia || "Joia" });
+      if(alvo.tel) setTimeout(() => window.open(alvo.url, "_blank"), 250);
     } else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = file.name;
       document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1200);
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      alert("A imagem da joia foi gerada. Vou abrir a conversa do cliente selecionado com o texto pronto. Anexe a imagem baixada, se o WhatsApp não anexar automaticamente.");
       window.open(alvo.url, "_blank");
     }
   } finally { setLoading(false); }
 }
 
 
-
 function abrirFotoGrande(id) { const j = getJoia(id); if(j && j.foto) { qs("fotoGrande").src = j.foto; abrirModal("modalFoto"); } }
 
 function duplicarJoia(id) {
   const j = getJoia(id); if(!j) return;
-  const copia = { ...j, id: gerarIdLocal("joia"), referencia: `${j.referencia}-CÓPIA`, status: "disponível", clienteId: "", dataVenda: "", dataCadastro: getHojeSTR(), dataEntrada: getHojeSTR(), quantidadeEstoque: Math.max(1, Number(j.quantidadeEstoque || 1)), quantidadeInicial: Math.max(1, Number(j.quantidadeEstoque || 1)) };
+  const copia = { ...j, id: gerarIdLocal("joia"), referencia: `${j.referencia}-CÓPIA`, status: "disponível", clienteId: "", dataVenda: "", dataCadastro: getHojeSTR() };
   tocarRegistro(copia);
   db.joias.push(copia);
   registrarAuditoria("Joia duplicada", `Ref. ${j.referencia} copiada para ${copia.referencia}`);
@@ -864,33 +837,20 @@ function abrirVenda(joiaId) {
   qs("vendaJoiaResumo").innerHTML = `${escapeHTML(j.referencia)} · ${escapeHTML(j.descricao || getCategoria(j.categoria).nome)}<br><small>${formatMoeda(j.precoVenda)}</small>`;
   preencherSelectClientes("vendaCliente", j.clienteId || "", false);
   qs("vendaData").value = getHojeSTR();
-  qs("vendaQuantidade").value = "1";
-  qs("vendaQuantidade").max = Math.max(1, Number(j.quantidadeEstoque || 1));
   qs("vendaValor").value = formatMoedaSem(j.precoVenda);
   qs("vendaForma").value = "";
   qs("vendaObs").value = "";
   abrirModal("modalVenda");
 }
 
-function atualizarTotalVenda() {
-  const joia = getJoia(qs("vendaJoiaId")?.value);
-  if(!joia) return;
-  const qtd = Math.max(1, Math.floor(Number(qs("vendaQuantidade")?.value || 1)));
-  qs("vendaValor").value = formatMoedaSem(Number(joia.precoVenda || 0) * qtd);
-}
-
 function salvarVenda() {
   const joia = getJoia(qs("vendaJoiaId").value); if(!joia) return;
   const clienteId = qs("vendaCliente").value;
   if(!clienteId) return alert("Selecione o cliente da venda.");
-  const qtdSolicitada = Math.max(1, Math.floor(Number(qs("vendaQuantidade").value || 1)));
-  const qtdAtual = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
-  if(qtdSolicitada > qtdAtual) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}.`);
-  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
+  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, data: qs("vendaData").value || getHojeSTR(), valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
-  joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
-  joia.status = joia.quantidadeEstoque > 0 ? "disponível" : "vendido";
+  joia.status = "vendido";
   joia.clienteId = clienteId;
   joia.dataVenda = venda.data;
   joia.valorVendaReal = venda.valorVenda;
@@ -926,7 +886,6 @@ function salvarReserva() {
 function liberarReserva(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   j.status = "disponível";
-  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) j.quantidadeEstoque = 1;
   j.clienteId = "";
   j.reservaObs = "";
   tocarRegistro(j);
@@ -940,7 +899,6 @@ function voltarJoiaEstoque(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   if(!confirm("Voltar esta joia para o estoque? O histórico da venda será mantido.")) return;
   j.status = "disponível";
-  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) j.quantidadeEstoque = 1;
   j.clienteId = "";
   j.dataVenda = "";
   tocarRegistro(j);
@@ -1001,51 +959,41 @@ function renderPainelResultados() {
   });
   const maxMes = Math.max(1, ...vendasPorMes.map(x => x.valor));
   const porCatEstoque = (db.categorias || []).map(cat => {
-    const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido" && Number(j.quantidadeEstoque || 0) > 0);
+    const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido");
     const vendidosMes = vendasMesLista.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
     const vendidosTotal = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
-    const qtdEstoque = itens.reduce((s,j) => s + Math.max(0, Number(j.quantidadeEstoque || 0)),0);
-    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
-    const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
+    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0),0);
+    const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0),0);
     const receitaMes = vendidosMes.reduce((s,v)=>s + Number(v.valorVenda||0),0);
-    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0) * Math.max(1, Number(v.quantidade||1)),0);
-    const qtdVendidosMes = vendidosMes.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
-    const qtdVendidosTotal = vendidosTotal.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
-    return { cat, qtd: qtdEstoque, vendidosMes: qtdVendidosMes, vendidosTotal: qtdVendidosTotal, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0), compra, venda, receitaMes, custoMes };
+    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0),0);
+    return { cat, qtd: itens.length, vendidosMes: vendidosMes.length, vendidosTotal: vendidosTotal.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra, venda, receitaMes, custoMes };
   });
   const maxCatVenda = Math.max(1, ...porCatEstoque.map(x => x.venda));
   const maxCatReceitaMes = Math.max(1, ...porCatEstoque.map(x => x.receitaMes));
-  const giro = r.totalUnidades ? Math.round((r.vendidas / r.totalUnidades) * 100) : 0;
+  const giro = r.total ? Math.round((r.vendidas / r.total) * 100) : 0;
   const margemPct = r.receitaMes ? ((r.margemRealMes / r.receitaMes) * 100) : 0;
   const variacaoLabel = `${r.variacaoMes >= 0 ? "+" : ""}${formatDecimal(r.variacaoMes,1)}%`;
   const clientesMes = Object.values(vendasMesLista.reduce((acc, v) => {
     const id = v.clienteId || "sem_cliente";
     const cli = getCliente(v.clienteId);
     acc[id] = acc[id] || { nome: cli?.nomeCompleto || "Cliente não localizado", qtd: 0, valor: 0 };
-    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
+    acc[id].qtd += 1; acc[id].valor += Number(v.valorVenda || 0);
     return acc;
   }, {})).sort((a,b)=>b.valor-a.valor).slice(0,5);
-  const topItensMes = Object.values(vendasMesLista.reduce((acc, v) => {
-    const joia = getJoia(v.joiaId);
-    const id = v.joiaId || "sem_item";
-    acc[id] = acc[id] || { ref: joia?.referencia || "-", nome: joia?.descricao || getCategoria(joia?.categoria).nome || "Item não localizado", qtd: 0, valor: 0 };
-    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
-    return acc;
-  }, {})).sort((a,b)=> b.qtd - a.qtd || b.valor - a.valor).slice(0,5);
   qs("painelResumo").innerHTML = `
     <div class="report-month-title">Consulta de ${escapeHTML(nomeMesLongo(mesRef))}</div>
     <div class="report-hero report-hero-3">
-      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.qtdVendidaMes} un. · ${r.vendasMesQtd} venda(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
+      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.vendasMesQtd} peça(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
       <div><small>Margem do mês</small><strong>${formatMoeda(r.margemRealMes)}</strong><em>${formatDecimal(margemPct,1)}% sobre vendas · custo ${formatMoeda(r.custoVendidoMes)}</em></div>
       <div><small>Valor de venda em estoque</small><strong>${formatMoeda(r.vendaEstoque)}</strong><em>${r.estoque} peças · ${formatDecimal(r.pesoEstoque,3)} g de ouro</em></div>
     </div>
     <div class="report-grid wide">
-      <div class="report-card"><small>Unidades vendidas</small><strong>${r.qtdVendidaMes}</strong><em>${formatDecimal(r.pesoVendidoMes,3)} g vendidos no mês</em></div>
+      <div class="report-card"><small>Peças vendidas</small><strong>${r.vendasMesQtd}</strong><em>${formatDecimal(r.pesoVendidoMes,3)} g vendidos no mês</em></div>
       <div class="report-card"><small>Disponíveis</small><strong>${r.disponiveis}</strong><em>prontas para venda</em></div>
       <div class="report-card"><small>Reservadas</small><strong>${r.reservadas}</strong><em>com cliente vinculado</em></div>
       <div class="report-card"><small>Custo em estoque</small><strong>${formatMoeda(r.custoEstoque)}</strong><em>margem pot. ${formatMoeda(r.margemPotencial)}</em></div>
       <div class="report-card"><small>Comparação mês anterior</small><strong>${variacaoLabel}</strong><em>mês anterior ${formatMoeda(r.receitaMesAnterior)}</em></div>
-      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / unidades cadastradas</em></div>
+      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / total cadastrado</em></div>
     </div>
     <div class="charts-grid">
       <div class="chart-card">
@@ -1068,11 +1016,7 @@ function renderPainelResultados() {
       </div>
       <div class="chart-card">
         <div class="section-title">Top clientes do mês</div>
-        ${clientesMes.length ? clientesMes.map(c => `<div class="ranking-row"><span>${escapeHTML(c.nome)}</span><strong>${formatMoeda(c.valor)}</strong><small>${c.qtd} unidade(s)</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
-      </div>
-      <div class="chart-card">
-        <div class="section-title">Itens mais vendidos do mês</div>
-        ${topItensMes.length ? topItensMes.map(i => `<div class="ranking-row"><span>${escapeHTML(i.ref)} · ${escapeHTML(i.nome)}</span><strong>${i.qtd} un.</strong><small>${formatMoeda(i.valor)}</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
+        ${clientesMes.length ? clientesMes.map(c => `<div class="ranking-row"><span>${escapeHTML(c.nome)}</span><strong>${formatMoeda(c.valor)}</strong><small>${c.qtd} venda(s)</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
       </div>
     </div>
     <div class="section-title">Resumo por categoria</div>
@@ -1082,7 +1026,7 @@ function renderPainelResultados() {
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
     ${vendasMesLista.map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
-      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
+      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
     }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
@@ -1261,14 +1205,14 @@ function importarDadosBackup(event) {
 function exportarCSV(tipo) {
   let rows = [];
   if(tipo === "joias") {
-    rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
-    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
+    rows = [["referencia","descricao","categoria","status","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
+    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
     rows = [["nome_completo","telefone","cidade","uf","endereco_entrega"]];
     (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cidade, c.uf, c.enderecoEntrega]));
   } else if(tipo === "vendas") {
-    rows = [["data","referencia","cliente","quantidade","valor_venda","forma_pagamento","observacao"]];
-    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
+    rows = [["data","referencia","cliente","valor_venda","forma_pagamento","observacao"]];
+    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
