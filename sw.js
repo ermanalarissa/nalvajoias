@@ -1,9 +1,9 @@
-const CACHE_NAME = 'joiaspro-v1.0.0';
+const CACHE_NAME = 'joiaspro-v1.0.1';
 const APP_SHELL = [
   './',
   './index.html',
-  './style.css?v=1.0.0',
-  './app.js?v=1.0.0',
+  './style.css?v=1.0.1',
+  './app.js?v=1.0.1',
   './manifest.json',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',

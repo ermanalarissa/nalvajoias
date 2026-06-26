@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.0.0";
+const APP_VERSION = "v1.0.1";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 const SYNC_PULL_INTERVAL_MS = 30000;
@@ -6,13 +6,22 @@ const AUDITORIA_RETENCAO_DIAS = 30;
 
 const CATEGORIAS_PADRAO = [
   { id: "correntaria", nome: "Correntaria", icon: "📿", ordem: 1 },
-  { id: "pulseiras", nome: "Pulseiras", icon: "〰️", ordem: 2 },
+  { id: "pulseiras", nome: "Pulseiras", icon: "⛓", ordem: 2 },
   { id: "brincos", nome: "Brincos", icon: "💎", ordem: 3 },
-  { id: "argolas", nome: "Argolas", icon: "⭕", ordem: 4 },
+  { id: "argolas", nome: "Argolas", icon: "⍥⃝⃝", ordem: 4 },
   { id: "pingentes", nome: "Pingentes", icon: "🔶", ordem: 5 },
   { id: "aneis", nome: "Anéis", icon: "💍", ordem: 6 },
-  { id: "escapularios", nome: "Escapulários", icon: "✝️", ordem: 7 },
+  { id: "escapularios", nome: "Escapulários", icon: "♱", ordem: 7 },
   { id: "aliancas", nome: "Alianças", icon: "🟡", ordem: 8 }
+];
+
+const TEMAS_PREDEFINIDOS = [
+  { id: "ouro_classico", nome: "Ouro Clássico", cor: "#9B6A2F", sub: "#fff8ef" },
+  { id: "champagne", nome: "Champagne", cor: "#B58B4A", sub: "#FFF7E8" },
+  { id: "preto_ouro", nome: "Preto e Ouro", cor: "#5A3B16", sub: "#FBF3E3" },
+  { id: "rose_gold", nome: "Rose Gold", cor: "#B76E79", sub: "#FFF1F3" },
+  { id: "esmeralda", nome: "Esmeralda", cor: "#0F6B58", sub: "#ECF8F4" },
+  { id: "safira", nome: "Safira", cor: "#1C3F75", sub: "#EEF4FF" }
 ];
 
 const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
@@ -62,7 +71,7 @@ function criarBancoBase() {
     vendas: [],
     administradores: [],
     auditoria: [],
-    configGerais: { corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
+    configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
     configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
     _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
   };
@@ -93,7 +102,11 @@ function normalizarBanco(dados, base = criarBancoBase()) {
   ["joias","clientes","vendas","categorias","administradores"].forEach(k => dados._deleted[k] = dados._deleted[k] || {});
 
   dados.categorias = dados.categorias.map((c, idx) => ({ id: c.id || normalizarTextoId(c.nome), nome: c.nome || "Categoria", icon: c.icon || "◆", ordem: Number(c.ordem || idx + 1), updatedAt: Number(c.updatedAt || 0), ...c }));
-  CATEGORIAS_PADRAO.forEach(cat => { if(!dados.categorias.some(c => c.id === cat.id)) dados.categorias.push({ ...cat }); });
+  CATEGORIAS_PADRAO.forEach(cat => {
+    const existente = dados.categorias.find(c => c.id === cat.id);
+    if(!existente) dados.categorias.push({ ...cat });
+    else { existente.icon = cat.icon; existente.nome = existente.nome || cat.nome; existente.ordem = cat.ordem; }
+  });
   dados.categorias.sort((a,b) => Number(a.ordem || 999) - Number(b.ordem || 999) || String(a.nome).localeCompare(String(b.nome)));
 
   dados.joias.forEach((j, idx) => {
@@ -302,9 +315,11 @@ function salvarTrocaSenhaPerfil() {
 
 function aplicarTema() {
   const cor = db.configGerais?.corTema || "#9B6A2F";
+  const sub = db.configGerais?.corSubHeader || "#fff8ef";
   document.documentElement.style.setProperty("--theme-base", cor);
   document.documentElement.style.setProperty("--theme-dark", shadeColor(cor, -42));
   document.documentElement.style.setProperty("--theme-soft", hexToRgba(cor, .12));
+  document.documentElement.style.setProperty("--theme-sub", sub);
   const meta = qs("metaThemeColor");
   if(meta) meta.setAttribute("content", cor);
 }
@@ -337,8 +352,16 @@ function calcularResumo() {
   const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0), 0);
   const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0), 0);
   const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0), 0);
-  const receitaVendida = (db.vendas || []).reduce((s,v) => s + Number(v.valorVenda || 0), 0);
-  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida };
+  const vendas = db.vendas || [];
+  const receitaVendida = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const hoje = new Date();
+  const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,"0")}`;
+  const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesAtual);
+  const receitaMes = vendasMes.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0); }, 0);
+  const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
+  const margemRealMes = receitaMes - custoVendidoMes;
+  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, receitaMes, ticketMedioMes, margemRealMes, mesAtual };
 }
 
 function renderResumoTopo() {
@@ -352,13 +375,10 @@ function renderResumoTopo() {
 }
 
 function renderCategorias() {
-  const counts = {};
-  (db.joias || []).filter(j => j.status !== "vendido").forEach(j => counts[j.categoria] = (counts[j.categoria] || 0) + 1);
   qs("homeCategorias").innerHTML = (db.categorias || []).map(cat => `
-    <button class="cat-card ${estado.categoria === cat.id ? "active" : ""}" onclick="setCategoria('${escapeHTML(cat.id)}')">
+    <button class="cat-card cat-${escapeHTML(cat.id)} ${estado.categoria === cat.id ? "active" : ""}" onclick="setCategoria('${escapeHTML(cat.id)}')">
       <span class="cat-icon">${escapeHTML(cat.icon || "◆")}</span>
       <span class="cat-name">${escapeHTML(cat.nome)}</span>
-      <span class="cat-count">${counts[cat.id] || 0} no estoque</span>
     </button>`).join("");
   const bar = qs("activeFilterBar");
   if(estado.categoria !== "todos") {
@@ -370,7 +390,7 @@ function renderCategorias() {
   }
 }
 
-function setCategoria(catId) { estado.categoria = catId; renderTudo(false); }
+function setCategoria(catId) { estado.categoria = (estado.categoria === catId) ? "todos" : catId; renderTudo(false); }
 function voltarInicio() { estado.categoria = "todos"; estado.status = "todos"; estado.busca = ""; qs("inputBusca").value = ""; renderTudo(false); }
 function setFiltroStatus(status) { estado.status = status; renderChips(); renderLista(); }
 function setBusca(v) { estado.busca = String(v || "").trim().toLowerCase(); renderLista(); }
@@ -410,7 +430,7 @@ function renderLista() {
             <span class="status-badge status-${escapeHTML(j.status)}">${escapeHTML(j.status)}</span>
           </div>
           <div class="product-meta">Ref. ${escapeHTML(j.referencia || "-")} · ${escapeHTML(cat.nome)}<br>${formatDecimal(j.pesoOuro,3)} g de ouro${cliente ? ` · ${escapeHTML(cliente.nomeCompleto)}` : ""}</div>
-          <div class="product-price"><strong>${formatMoeda(j.precoVenda)}</strong><small>custo ${formatMoeda(j.precoCompra)}</small></div>
+          <div class="product-price"><strong>${formatMoeda(j.precoVenda)}</strong><small>${formatDecimal(j.pesoOuro,3)} g</small></div>
         </div>
       </article>`;
   }).join("");
@@ -419,7 +439,6 @@ function renderLista() {
 function renderTudo(scrollTop = false) {
   aplicarTema();
   renderCabecalho();
-  renderResumoTopo();
   renderCategorias();
   renderChips();
   renderLista();
@@ -499,6 +518,8 @@ function comprimirImagem(file, maxDim = 1200, qualidade = .82) {
         const canvas = document.createElement("canvas");
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
         resolve(canvas.toDataURL("image/jpeg", qualidade));
       };
@@ -574,12 +595,126 @@ function abrirDetalheJoia(id) {
     <div class="detail-actions">
       <button class="btn-outline" onclick="fecharModal('modalJoiaDetalhe'); abrirFormularioJoia('${escapeHTML(j.id)}')">Editar</button>
       <button class="btn-outline" onclick="duplicarJoia('${escapeHTML(j.id)}')">Duplicar</button>
+      <button class="btn-outline" onclick="abrirCompartilharJoia('${escapeHTML(j.id)}')">Enviar WhatsApp</button>
       ${j.status !== "vendido" ? `<button class="btn-action" onclick="abrirVenda('${escapeHTML(j.id)}')">Registrar venda</button>` : `<button class="btn-action" onclick="voltarJoiaEstoque('${escapeHTML(j.id)}')">Voltar ao estoque</button>`}
       ${j.status !== "reservado" && j.status !== "vendido" ? `<button class="btn-outline" onclick="abrirReserva('${escapeHTML(j.id)}')">Reservar</button>` : `<button class="btn-outline" onclick="liberarReserva('${escapeHTML(j.id)}')">Liberar reserva</button>`}
       <button class="btn-danger full-row" onclick="excluirJoia('${escapeHTML(j.id)}')">Excluir joia</button>
     </div>
   `;
   abrirModal("modalJoiaDetalhe");
+}
+
+
+function getNumeroWhatsappCliente(cliente) {
+  return String(cliente?.telefone || "").replace(/\D/g, "").replace(/^0+/, "");
+}
+function getMensagemJoia(j) {
+  const cat = getCategoria(j.categoria);
+  const nomeLoja = db.loja?.nome || "JoiasPro";
+  return `Olá! Segue a joia da ${nomeLoja}:\n\n${j.descricao || cat.nome}\nRef.: ${j.referencia || "-"}\nCategoria: ${cat.nome}\nPeso: ${formatDecimal(j.pesoOuro,3)} g de ouro\nPreço: ${formatMoeda(j.precoVenda)}\n\nTenho interesse?`;
+}
+function abrirCompartilharJoia(id) {
+  const j = getJoia(id); if(!j) return;
+  qs("shareJoiaId").value = id;
+  preencherSelectClientes("shareCliente", j.clienteId || "", true);
+  qs("shareTelefoneManual").value = getCliente(j.clienteId)?.telefone || "";
+  qs("shareMensagem").value = getMensagemJoia(j);
+  qs("sharePreview").innerHTML = `${j.foto ? `<img src="${j.foto}" alt="${escapeHTML(j.referencia)}">` : `<span>${escapeHTML(getCategoria(j.categoria).icon || "◆")}</span>`}<div><strong>${escapeHTML(j.descricao || getCategoria(j.categoria).nome)}</strong><small>Ref. ${escapeHTML(j.referencia || "-")} · ${formatMoeda(j.precoVenda)}</small></div>`;
+  abrirModal("modalCompartilhar");
+}
+function atualizarTelefoneSharePorCliente() {
+  const c = getCliente(qs("shareCliente").value);
+  qs("shareTelefoneManual").value = c?.telefone || "";
+}
+function abrirWhatsappTexto() {
+  const j = getJoia(qs("shareJoiaId").value); if(!j) return;
+  let tel = String(qs("shareTelefoneManual").value || getCliente(qs("shareCliente").value)?.telefone || "").replace(/\D/g, "");
+  if(tel && tel.length <= 11 && !tel.startsWith("55")) tel = "55" + tel;
+  const texto = encodeURIComponent(qs("shareMensagem").value || getMensagemJoia(j));
+  const url = tel ? `https://wa.me/${tel}?text=${texto}` : `https://wa.me/?text=${texto}`;
+  window.open(url, "_blank");
+}
+async function gerarCartaoJoiaBlob(j) {
+  const cat = getCategoria(j.categoria);
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1350;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = db.configGerais?.corSubHeader || "#fff8ef";
+  ctx.fillRect(0,0,canvas.width,1350);
+  ctx.fillStyle = "#ffffff";
+  roundRect(ctx, 70, 70, 940, 1210, 42, true, false);
+  ctx.fillStyle = db.configGerais?.corTema || "#9B6A2F";
+  ctx.font = "800 44px Segoe UI, Arial";
+  ctx.fillText(db.loja?.nome || "JoiasPro", 110, 135);
+  ctx.font = "700 34px Segoe UI, Arial";
+  ctx.fillStyle = "#241A12";
+  ctx.fillText(j.descricao || cat.nome, 110, 940, 860);
+  ctx.font = "700 26px Segoe UI, Arial";
+  ctx.fillStyle = "#746B60";
+  ctx.fillText(`Ref. ${j.referencia || "-"} · ${cat.nome}`, 110, 995, 860);
+  ctx.fillText(`Peso: ${formatDecimal(j.pesoOuro,3)} g de ouro`, 110, 1042, 860);
+  ctx.font = "900 54px Segoe UI, Arial";
+  ctx.fillStyle = db.configGerais?.corTema || "#9B6A2F";
+  ctx.fillText(formatMoeda(j.precoVenda), 110, 1130, 860);
+  ctx.font = "700 24px Segoe UI, Arial";
+  ctx.fillStyle = "#746B60";
+  ctx.fillText("Mensagem gerada pelo JoiasPro", 110, 1215, 860);
+  if(j.foto) {
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { drawImageCover(ctx, img, 110, 180, 860, 700, 30); resolve(); };
+      img.onerror = resolve;
+      img.src = j.foto;
+    });
+  } else {
+    ctx.fillStyle = "#ffffff";
+    roundRect(ctx, 110, 180, 860, 700, 30, true, false);
+    ctx.fillStyle = db.configGerais?.corTema || "#9B6A2F";
+    ctx.font = "200 220px Segoe UI Symbol, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(cat.icon || "◆", 540, 570);
+    ctx.textAlign = "left";
+  }
+  return await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .92));
+}
+function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r); ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
+  if(fill) ctx.fill(); if(stroke) ctx.stroke();
+}
+function drawImageCover(ctx, img, x, y, w, h, r = 0) {
+  const scale = Math.max(w / img.width, h / img.height);
+  const sw = w / scale, sh = h / scale;
+  const sx = (img.width - sw) / 2, sy = (img.height - sh) / 2;
+  ctx.save();
+  roundRect(ctx, x, y, w, h, r, false, false);
+  ctx.clip();
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(x, y, w, h);
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  ctx.restore();
+}
+async function compartilharJoiaImagemWhatsapp() {
+  const j = getJoia(qs("shareJoiaId").value); if(!j) return;
+  setLoading(true, "Gerando imagem da joia...");
+  try {
+    const blob = await gerarCartaoJoiaBlob(j);
+    const file = new File([blob], `${normalizarTextoId(j.referencia || "joia")}.jpg`, { type: "image/jpeg" });
+    const texto = qs("shareMensagem").value || getMensagemJoia(j);
+    if(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      await navigator.share({ files: [file], text: texto, title: j.descricao || j.referencia || "Joia" });
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      alert("A imagem foi baixada. Agora o WhatsApp será aberto com a mensagem para você anexar a imagem, se desejar.");
+      abrirWhatsappTexto();
+    }
+  } finally { setLoading(false); }
 }
 
 function abrirFotoGrande(id) { const j = getJoia(id); if(j && j.foto) { qs("fotoGrande").src = j.foto; abrirModal("modalFoto"); } }
@@ -751,30 +886,95 @@ function voltarJoiaEstoque(joiaId) {
   renderTudo();
 }
 
+function getUltimosMeses(qtd = 6) {
+  const out = [];
+  const d = new Date();
+  d.setDate(1);
+  for(let i = qtd - 1; i >= 0; i--) {
+    const x = new Date(d);
+    x.setMonth(d.getMonth() - i);
+    out.push(`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}`);
+  }
+  return out;
+}
+function labelMesCurto(mesRef) {
+  const nomes = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const [ano, mes] = String(mesRef).split("-").map(Number);
+  return `${nomes[(mes || 1)-1]}/${String(ano).slice(2)}`;
+}
+
 function abrirPainelResultados() { renderPainelResultados(); abrirModal("modalPainelResultados"); }
 function renderPainelResultados() {
   const r = calcularResumo();
-  const porCat = (db.categorias || []).map(cat => {
+  const vendas = [...(db.vendas || [])].sort((a,b)=>String(b.data).localeCompare(String(a.data)));
+  const meses = getUltimosMeses(6);
+  const vendasPorMes = meses.map(m => ({ mes: m, label: labelMesCurto(m), valor: vendas.filter(v => String(v.data || "").slice(0,7) === m).reduce((s,v) => s + Number(v.valorVenda || 0), 0), qtd: vendas.filter(v => String(v.data || "").slice(0,7) === m).length }));
+  const maxMes = Math.max(1, ...vendasPorMes.map(x => x.valor));
+  const porCatEstoque = (db.categorias || []).map(cat => {
     const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido");
-    return { cat, qtd: itens.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra: itens.reduce((s,j) => s + Number(j.precoCompra||0),0), venda: itens.reduce((s,j) => s + Number(j.precoVenda||0),0) };
+    const vendidos = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
+    return { cat, qtd: itens.length, vendidos: vendidos.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra: itens.reduce((s,j) => s + Number(j.precoCompra||0),0), venda: itens.reduce((s,j) => s + Number(j.precoVenda||0),0), receita: vendidos.reduce((s,v)=>s + Number(v.valorVenda||0),0) };
   });
+  const maxCatVenda = Math.max(1, ...porCatEstoque.map(x => x.venda));
+  const giro = r.total ? Math.round((r.vendidas / r.total) * 100) : 0;
+  const margemPct = r.vendaEstoque ? ((r.margemPotencial / r.vendaEstoque) * 100) : 0;
   qs("painelResumo").innerHTML = `
-    <div class="report-grid">
-      <div class="report-card"><small>Itens cadastrados</small><strong>${r.total}</strong></div>
-      <div class="report-card"><small>Itens em estoque</small><strong>${r.estoque}</strong></div>
-      <div class="report-card"><small>Peso em estoque</small><strong>${formatDecimal(r.pesoEstoque,3)} g</strong></div>
-      <div class="report-card"><small>Receita vendida</small><strong>${formatMoeda(r.receitaVendida)}</strong></div>
+    <div class="report-hero">
+      <div><small>Valor de venda em estoque</small><strong>${formatMoeda(r.vendaEstoque)}</strong><em>${r.estoque} peças · ${formatDecimal(r.pesoEstoque,3)} g de ouro</em></div>
+      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.vendasMesQtd} venda(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
+    </div>
+    <div class="report-grid wide">
+      <div class="report-card"><small>Disponíveis</small><strong>${r.disponiveis}</strong><em>prontas para venda</em></div>
+      <div class="report-card"><small>Reservadas</small><strong>${r.reservadas}</strong><em>com cliente vinculado</em></div>
+      <div class="report-card"><small>Vendidas</small><strong>${r.vendidas}</strong><em>${formatMoeda(r.receitaVendida)} total</em></div>
+      <div class="report-card"><small>Custo em estoque</small><strong>${formatMoeda(r.custoEstoque)}</strong><em>margem pot. ${formatMoeda(r.margemPotencial)}</em></div>
+      <div class="report-card"><small>Margem potencial</small><strong>${formatDecimal(margemPct,1)}%</strong><em>sobre venda estoque</em></div>
+      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / total</em></div>
+    </div>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="section-title">Vendas dos últimos 6 meses</div>
+        <div class="bar-chart vertical-bars">
+          ${vendasPorMes.map(x => `<div class="vbar-wrap"><div class="vbar" style="height:${Math.max(5, Math.round((x.valor/maxMes)*100))}%"></div><small>${escapeHTML(x.label)}</small><b>${formatMoeda(x.valor)}</b></div>`).join("")}
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="section-title">Valor em estoque por categoria</div>
+        <div class="bar-chart">
+          ${porCatEstoque.map(x => `<div class="hbar-row"><span>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</span><div><i style="width:${Math.max(3, Math.round((x.venda/maxCatVenda)*100))}%"></i></div><b>${formatMoeda(x.venda)}</b></div>`).join("")}
+        </div>
+      </div>
     </div>
     <div class="section-title">Resumo por categoria</div>
-    <div class="table-wrap"><table><thead><tr><th>Categoria</th><th>Qtd.</th><th>Peso</th><th>Custo</th><th>Venda</th><th>Margem</th></tr></thead><tbody>
-      ${porCat.map(x => `<tr><td>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</td><td>${x.qtd}</td><td>${formatDecimal(x.peso,3)} g</td><td>${formatMoeda(x.compra)}</td><td>${formatMoeda(x.venda)}</td><td>${formatMoeda(x.venda - x.compra)}</td></tr>`).join("")}
+    <div class="table-wrap"><table><thead><tr><th>Categoria</th><th>Estoque</th><th>Vendidas</th><th>Peso</th><th>Custo</th><th>Venda est.</th><th>Margem pot.</th></tr></thead><tbody>
+      ${porCatEstoque.map(x => `<tr><td>${escapeHTML(x.cat.icon)} ${escapeHTML(x.cat.nome)}</td><td>${x.qtd}</td><td>${x.vendidos}</td><td>${formatDecimal(x.peso,3)} g</td><td>${formatMoeda(x.compra)}</td><td>${formatMoeda(x.venda)}</td><td>${formatMoeda(x.venda - x.compra)}</td></tr>`).join("")}
     </tbody></table></div>
     <div class="section-title">Últimas vendas</div>
-    ${(db.vendas || []).slice().sort((a,b)=>String(b.data).localeCompare(String(a.data))).slice(0,10).map(v => {
+    ${vendas.slice(0,12).map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
-      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")}</small></div>`;
+      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
     }).join("") || `<p class="hint">Nenhuma venda registrada ainda.</p>`}
   `;
+}
+function getTemaSelecionado() {
+  const id = qs("temaSelecionado")?.value || db.configGerais?.temaId || "ouro_classico";
+  return TEMAS_PREDEFINIDOS.find(t => t.id === id) || TEMAS_PREDEFINIDOS[0];
+}
+function escolherTema(id) {
+  const tema = TEMAS_PREDEFINIDOS.find(t => t.id === id) || TEMAS_PREDEFINIDOS[0];
+  if(qs("temaSelecionado")) qs("temaSelecionado").value = tema.id;
+  qsa(".theme-option").forEach(btn => btn.classList.toggle("active", btn.dataset.theme === tema.id));
+  document.documentElement.style.setProperty("--theme-base", tema.cor);
+  document.documentElement.style.setProperty("--theme-dark", shadeColor(tema.cor, -42));
+  document.documentElement.style.setProperty("--theme-soft", hexToRgba(tema.cor, .12));
+  document.documentElement.style.setProperty("--theme-sub", tema.sub);
+}
+function renderTemasPredefinidos() {
+  const atual = db.configGerais?.temaId || (TEMAS_PREDEFINIDOS.find(t => t.cor === db.configGerais?.corTema)?.id) || "ouro_classico";
+  const box = qs("temasPredefinidos");
+  if(!box) return;
+  qs("temaSelecionado").value = atual;
+  box.innerHTML = TEMAS_PREDEFINIDOS.map(t => `<button type="button" class="theme-option ${t.id === atual ? "active" : ""}" data-theme="${escapeHTML(t.id)}" onclick="escolherTema('${escapeHTML(t.id)}')"><span style="background:${escapeHTML(t.cor)}"></span><strong>${escapeHTML(t.nome)}</strong></button>`).join("");
 }
 
 function abrirConfiguracoes() {
@@ -782,7 +982,7 @@ function abrirConfiguracoes() {
   qs("lojaTelefone").value = db.loja.telefone || "";
   qs("lojaCidade").value = db.loja.cidade || "";
   preencherUFSelect("lojaUF", db.loja.uf || "PB");
-  qs("corTema").value = db.configGerais.corTema || "#9B6A2F";
+  renderTemasPredefinidos();
   qs("configUrlApp").value = db.configs.url || "";
   logoLojaTemp = db.loja.logo || "";
   renderPreviewLogoLoja();
@@ -800,7 +1000,10 @@ function salvarConfiguracoes() {
   db.loja.cidade = qs("lojaCidade").value.trim();
   db.loja.uf = qs("lojaUF").value;
   db.loja.logo = logoLojaTemp || "";
-  db.configGerais.corTema = qs("corTema").value || "#9B6A2F";
+  const tema = getTemaSelecionado();
+  db.configGerais.temaId = tema.id;
+  db.configGerais.corTema = tema.cor;
+  db.configGerais.corSubHeader = tema.sub;
   db.configs.url = qs("configUrlApp").value.trim();
   db.configs.somenteLocal = !db.configs.url;
   tocarRegistro(db.loja);

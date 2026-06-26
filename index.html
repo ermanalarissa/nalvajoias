@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=1.0.0">
+  <link rel="stylesheet" href="style.css?v=1.0.1">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v1.0.0</div>
+    <div class="splash-version" id="splashVersao">v1.0.1</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -34,7 +34,7 @@
 
   <div class="modal-overlay login-overlay" id="modalSetupUrl">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.0</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.1</span></div>
       <p class="login-subtitle">Configure o back-end para sincronizar os dados entre aparelhos e manter backup das fotos.</p>
       <div class="form-group">
         <label>URL do Back-end</label>
@@ -51,7 +51,7 @@
 
   <div class="modal-overlay login-overlay" id="modalLoginAdmin">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.0</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.1</span></div>
       <p class="login-subtitle" id="loginAdminTexto">Escolha o usuário e informe a senha.</p>
       <div class="form-group">
         <label>Usuário</label>
@@ -86,8 +86,6 @@
     </header>
 
     <main class="main-content">
-      <section class="top-summary" id="topSummary"></section>
-
       <section class="home-categories" id="homeCategorias"></section>
 
       <section class="filters">
@@ -271,10 +269,10 @@
         <div class="form-group"><label>Cidade</label><input type="text" id="lojaCidade"></div>
         <div class="form-group"><label>UF</label><select id="lojaUF"></select></div>
       </div>
-      <div class="grid-2">
-        <div class="form-group"><label>Cor principal</label><input type="color" id="corTema"></div>
-        <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
-      </div>
+      <div class="section-title">Tema visual</div>
+      <input type="hidden" id="temaSelecionado">
+      <div class="theme-options" id="temasPredefinidos"></div>
+      <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
       <div class="sync-box" id="syncInfo"></div>
       <div class="modal-actions wrap">
         <button class="btn-outline" onclick="puxarDadosNuvem(false)">Puxar nuvem</button>
@@ -322,10 +320,28 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="modalCompartilhar" style="z-index:2250">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>Enviar joia pelo WhatsApp</span><button class="icon-btn" onclick="fecharModal('modalCompartilhar')">✖</button></div>
+      <input type="hidden" id="shareJoiaId">
+      <div class="share-preview" id="sharePreview"></div>
+      <div class="grid-2">
+        <div class="form-group"><label>Cliente</label><select id="shareCliente" onchange="atualizarTelefoneSharePorCliente()"></select></div>
+        <div class="form-group"><label>WhatsApp</label><input type="tel" id="shareTelefoneManual" inputmode="tel" oninput="maskTelefone(this)" placeholder="(83) 99999-9999"></div>
+      </div>
+      <div class="form-group"><label>Mensagem</label><textarea id="shareMensagem" rows="8"></textarea></div>
+      <div class="modal-actions wrap">
+        <button class="btn-outline" onclick="abrirWhatsappTexto()">Enviar texto no WhatsApp</button>
+        <button class="btn-action" onclick="compartilharJoiaImagemWhatsapp()">Compartilhar imagem + texto</button>
+      </div>
+      <p class="hint">No celular, o botão de imagem usa o compartilhamento do aparelho e permite escolher o WhatsApp. No computador, o app baixa uma imagem pronta da joia e abre a mensagem no WhatsApp.</p>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="modalFoto" style="z-index:2500">
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=1.0.0" defer></script>
+  <script src="app.js?v=1.0.1" defer></script>
 </body>
 </html>

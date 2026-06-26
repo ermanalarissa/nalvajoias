@@ -1,52 +1,37 @@
 # JoiasPro
 
-App PWA para controle de joias, clientes, estoque, preços, fotos, vendas, backup e sincronização.
+PWA para controle de estoque, vendas, clientes, fotos e sincronização de joias.
 
-## Arquivos principais
+## Versão
+v1.0.1
 
-- `index.html`: tela principal do aplicativo.
-- `style.css`: visual responsivo em celular e desktop.
-- `app.js`: lógica do app, banco local, fotos, vendas, clientes, auditoria e sincronização.
-- `manifest.json`: configuração PWA para instalar no celular.
-- `sw.js`: cache offline e atualização.
-- `backend-google-apps-script.gs`: back-end para sincronização usando Google Apps Script.
-- `icons/`: ícones do PWA.
+## Senha inicial
+- Usuário: **Administrador**
+- Senha: **1999**
 
-## Login inicial
+## Principais funções
+- Cadastro de joias com foto, referência, categoria, peso em ouro, preço de compra, preço de venda, status, cliente vinculado e observações.
+- Categorias na tela inicial: correntaria, pulseiras, brincos, argolas, pingentes, anéis, escapulários e alianças.
+- Tela inicial sem dashboard e sem exibição de custo de compra.
+- Clique na categoria para filtrar; clique novamente para desmarcar.
+- Clientes com nome completo, WhatsApp, cidade, UF e endereço de entrega.
+- Registro de venda e reserva.
+- Envio de joia pelo WhatsApp com texto de especificação e geração de imagem/cartão da peça.
+- Painel de resultados com vendas do mês, valor em estoque, custo, margem potencial, ticket médio, giro, gráficos e resumo por categoria.
+- Temas visuais pré-definidos para loja de joias.
+- Backup local em JSON, exportação CSV e sincronização por Google Apps Script.
+- Fotos comprimidas com fundo branco para evitar PNG transparente com fundo preto.
 
-Usuário: `Administrador`
+## Como usar no GitHub Pages
+1. Envie todos os arquivos deste pacote para um repositório.
+2. Ative o GitHub Pages apontando para a branch principal.
+3. Acesse o link publicado no celular ou computador.
 
-Senha: `1999`
+## Sincronização
+1. Crie um projeto no Google Apps Script.
+2. Cole o conteúdo de `backend-google-apps-script.gs`.
+3. Publique como Web App.
+4. Copie a URL `/exec` e cole no app em **Configurações > URL do back-end**.
 
-A senha pode ser alterada no menu Perfil. Também é possível criar novos usuários em Configurações.
-
-## Publicar no GitHub Pages
-
-1. Crie um repositório no GitHub.
-2. Envie todos estes arquivos para a raiz do repositório.
-3. Vá em `Settings > Pages`.
-4. Em `Build and deployment`, selecione `Deploy from a branch`.
-5. Escolha a branch `main` e a pasta `/root`.
-6. Abra o link do GitHub Pages gerado.
-
-## Configurar sincronização
-
-1. Acesse https://script.google.com.
-2. Crie um novo projeto.
-3. Cole o conteúdo de `backend-google-apps-script.gs` no arquivo `Code.gs`.
-4. Clique em `Implantar > Nova implantação`.
-5. Escolha o tipo `Aplicativo da Web`.
-6. Em `Executar como`, selecione você mesmo.
-7. Em `Quem tem acesso`, selecione qualquer pessoa com o link.
-8. Copie a URL terminada em `/exec`.
-9. Abra o JoiasPro e cole a URL no campo de back-end.
-
-## Backup
-
-O backup JSON inclui as joias, clientes, vendas, usuários, auditoria e fotos comprimidas em base64.
-
-As fotos são comprimidas automaticamente antes de salvar para reduzir o tamanho do backup.
-
-## Observação importante
-
-Este é um app PWA sem servidor próprio. A proteção por senha impede acesso casual à interface, mas arquivos estáticos publicados no GitHub Pages ficam públicos. Para uso com dados sensíveis, hospede em ambiente privado ou adicione autenticação no servidor.
+## Observação sobre WhatsApp
+O envio direto de texto usa `wa.me`. Para enviar imagem + texto, o app usa o compartilhamento nativo do celular quando disponível. Em computador, ele baixa uma imagem pronta da joia e abre a conversa do WhatsApp para anexar manualmente.
