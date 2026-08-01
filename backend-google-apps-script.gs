@@ -14,13 +14,19 @@ const PROPERTY_KEY = 'JOIASPRO_DB_JSON';
 const LOCK_TIMEOUT_MS = 25000;
 
 function doGet(e) {
-  return jsonResponse(getBancoSalvo());
+  const dados = getBancoSalvo();
+  const serverNow = Date.now();
+  // Mantido no envelope do próprio banco para não quebrar versões antigas do app.
+  dados._serverNow = serverNow;
+  dados._serverRevision = Number(dados.configs.syncRevision || 0);
+  return jsonResponse(dados);
 }
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(LOCK_TIMEOUT_MS);
   try {
+    const serverNow = Date.now();
     const payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (!payload || payload.action !== 'salvar_banco') {
       return jsonResponse({ ok: false, erro: 'Ação inválida.' });
@@ -35,16 +41,23 @@ function doPost(e) {
     const baseRevision = Number(payload.baseRevision || recebido.configs.syncRevision || 0);
     const atualRevision = Number(atual.configs.syncRevision || 0);
 
-    let finalDb = baseRevision < atualRevision ? mesclarBancosPorData(atual, recebido) : recebido;
+    // Cada request é processado dentro do lock. Se o aparelho estiver atrasado,
+    // preservamos o snapshot atual e aplicamos somente os registros marcados
+    // como alterados naquele aparelho. Assim, duas vendas/entradas simultâneas
+    // não apagam os dados independentes umas das outras.
+    let finalDb = baseRevision < atualRevision ? mesclarBancosNoServidor(atual, recebido) : recebido;
     finalDb = normalizarBanco(finalDb);
 
     const novaRevision = atualRevision + 1;
     finalDb.configs.syncRevision = novaRevision;
-    finalDb.configs.ultimaSincronizacao = Date.now();
-    finalDb = limparFlagsCliente(finalDb, novaRevision);
+    finalDb.configs.ultimaSincronizacao = serverNow;
+    finalDb.configs.serverNow = serverNow;
+    finalDb = limparFlagsCliente(finalDb, novaRevision, serverNow);
 
     PropertiesService.getScriptProperties().setProperty(PROPERTY_KEY, JSON.stringify(finalDb));
-    return jsonResponse({ ok: true, revision: novaRevision, dados: finalDb });
+    finalDb._serverNow = serverNow;
+    finalDb._serverRevision = novaRevision;
+    return jsonResponse({ ok: true, revision: novaRevision, serverNow: serverNow, dados: finalDb });
   } catch (err) {
     return jsonResponse({ ok: false, erro: String(err) });
   } finally {
@@ -80,7 +93,7 @@ function criarBancoBase() {
     administradores: [],
     auditoria: [],
     configGerais: { corTema: '#9B6A2F', corSubHeader: '#fff8ef' },
-    configs: { url: '', dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, syncRevision: 0, senhaAdmin: '1999', clientId: '' },
+    configs: { url: '', dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: '1999', clientId: '' },
     _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
   };
 }
@@ -123,14 +136,21 @@ function normalizarBanco(dados) {
   return dados;
 }
 
-function limparFlagsCliente(db, revision) {
-  const now = Date.now();
+function limparFlagsCliente(db, revision, serverNow) {
+  const now = Number(serverNow || Date.now());
   const clearObj = function(obj) {
     if (!obj || typeof obj !== 'object') return;
+    const dirty = !!obj._clientDirty;
     delete obj._clientDirty;
     delete obj._clientChangedAt;
-    obj._serverUpdatedAt = now;
-    obj._serverSeq = revision;
+    delete obj._clientId;
+    delete obj._clientUser;
+    delete obj._inventoryDelta;
+    if (dirty) obj.updatedAt = now;
+    if (dirty || !obj._serverUpdatedAt) obj._serverUpdatedAt = now;
+    if (dirty || !obj._serverSeq) obj._serverSeq = revision;
+    if (dirty && obj.deletedAt) obj.deletedAt = now;
+    if (dirty && obj.createdAt) obj.createdAt = now;
   };
 
   clearObj(db.loja);
@@ -145,6 +165,102 @@ function limparFlagsCliente(db, revision) {
     });
   });
   return db;
+}
+
+function chaveRegistro(item) {
+  return item && (item.id || item.referencia || item.nome);
+}
+
+function mesclarObjetoNoServidor(atual, recebido) {
+  if (!atual) return recebido || {};
+  if (!recebido) return atual || {};
+  // Um registro marcado pelo cliente é uma alteração intencional. Como os
+  // requests são serializados pelo LockService, o último request recebido
+  // vence somente para aquele registro, sem substituir os demais.
+  return recebido._clientDirty ? recebido : atual;
+}
+
+function mesclarListaNoServidor(atual, recebido) {
+  const mapa = {};
+  (atual || []).forEach(function(item) {
+    const id = chaveRegistro(item);
+    if (id) mapa[id] = item;
+  });
+  (recebido || []).forEach(function(item) {
+    const id = chaveRegistro(item);
+    if (!id) return;
+    if (!mapa[id] || item._clientDirty) mapa[id] = item;
+  });
+  return Object.keys(mapa).map(function(id) { return mapa[id]; });
+}
+
+function mesclarJoiasNoServidor(atual, recebido) {
+  const mapa = {};
+  (atual || []).forEach(function(item) {
+    const id = chaveRegistro(item);
+    if (id) mapa[id] = item;
+  });
+  (recebido || []).forEach(function(item) {
+    const id = chaveRegistro(item);
+    if (!id) return;
+    if (!mapa[id] || !item._clientDirty) {
+      if (!mapa[id]) mapa[id] = item;
+      return;
+    }
+    const atualJoia = mapa[id];
+    const proxima = Object.assign({}, item);
+    const delta = Number(item._inventoryDelta || 0);
+    if (Number.isFinite(delta) && delta !== 0) {
+      const quantidadeAtual = Math.max(0, Math.floor(Number(atualJoia.quantidadeEstoque || 0)));
+      proxima.quantidadeEstoque = Math.max(0, Math.floor(quantidadeAtual + delta));
+      proxima.quantidadeInicial = Math.max(Number(atualJoia.quantidadeInicial || 0), Number(item.quantidadeInicial || 0), proxima.quantidadeEstoque);
+      if (proxima.quantidadeEstoque <= 0 && proxima.status !== 'reservado') proxima.status = 'vendido';
+      if (proxima.quantidadeEstoque > 0 && proxima.status === 'vendido') proxima.status = 'disponível';
+    }
+    mapa[id] = proxima;
+  });
+  return Object.keys(mapa).map(function(id) { return mapa[id]; });
+}
+
+function mesclarExclusoesNoServidor(atual, recebido) {
+  const tipos = ['joias','clientes','vendas','categorias','administradores'];
+  const out = {};
+  tipos.forEach(function(tipo) {
+    out[tipo] = {};
+    const aa = (atual && atual[tipo]) || {};
+    const bb = (recebido && recebido[tipo]) || {};
+    Object.keys(aa).forEach(function(id) { out[tipo][id] = aa[id]; });
+    Object.keys(bb).forEach(function(id) {
+      if (!out[tipo][id] || bb[id]._clientDirty) out[tipo][id] = bb[id];
+    });
+  });
+  return out;
+}
+
+function removerExcluidos(lista, excluidos) {
+  const mapa = excluidos || {};
+  return (lista || []).filter(function(item) {
+    const id = chaveRegistro(item);
+    return !id || !mapa[id];
+  });
+}
+
+function mesclarBancosNoServidor(atual, recebido) {
+  atual = normalizarBanco(atual);
+  recebido = normalizarBanco(recebido);
+  const merged = normalizarBanco(atual);
+  merged._deleted = mesclarExclusoesNoServidor(atual._deleted, recebido._deleted);
+  merged.loja = mesclarObjetoNoServidor(atual.loja, recebido.loja);
+  merged.configGerais = mesclarObjetoNoServidor(atual.configGerais, recebido.configGerais);
+  merged.categorias = removerExcluidos(mesclarListaNoServidor(atual.categorias, recebido.categorias), merged._deleted.categorias);
+  merged.joias = removerExcluidos(mesclarJoiasNoServidor(atual.joias, recebido.joias), merged._deleted.joias);
+  merged.clientes = removerExcluidos(mesclarListaNoServidor(atual.clientes, recebido.clientes), merged._deleted.clientes);
+  merged.vendas = removerExcluidos(mesclarListaNoServidor(atual.vendas, recebido.vendas), merged._deleted.vendas);
+  merged.administradores = removerExcluidos(mesclarListaNoServidor(atual.administradores, recebido.administradores), merged._deleted.administradores);
+  merged.auditoria = mesclarListaNoServidor(atual.auditoria, recebido.auditoria);
+  merged.configs = Object.assign({}, atual.configs || {}, recebido.configs || {});
+  merged.configs.syncRevision = Math.max(Number(atual.configs.syncRevision || 0), Number(recebido.configs.syncRevision || 0));
+  return normalizarBanco(merged);
 }
 
 function objetoMaisNovo(a, b) {

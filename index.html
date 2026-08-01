@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=1.0.3">
+  <link rel="stylesheet" href="style.css?v=0.1">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v1.0.3</div>
+    <div class="splash-version" id="splashVersao">v0.1</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -34,7 +34,7 @@
 
   <div class="modal-overlay login-overlay" id="modalSetupUrl">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v1.0.3</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="setupAppVersion">v0.1</span></div>
       <p class="login-subtitle">Configure o back-end para sincronizar os dados entre aparelhos e manter backup das fotos.</p>
       <div class="form-group">
         <label>URL do Back-end</label>
@@ -51,7 +51,7 @@
 
   <div class="modal-overlay login-overlay" id="modalLoginAdmin">
     <div class="modal login-modal">
-      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v1.0.3</span></div>
+      <div class="login-brand"><strong>JoiasPro</strong><span id="loginAppVersion">v0.1</span></div>
       <p class="login-subtitle" id="loginAdminTexto">Escolha o usuário e informe a senha.</p>
       <div class="form-group">
         <label>Usuário</label>
@@ -108,7 +108,6 @@
       </section>
     </main>
 
-    <button class="fab" onclick="abrirFormularioJoia()" title="Nova joia">＋</button>
   </div>
 
   <div class="modal-overlay" id="modalPainelUnificado">
@@ -158,9 +157,11 @@
       <div class="photo-picker">
         <div class="photo-preview" id="previewFotoJoia"><span>📷</span></div>
         <div>
-          <label class="file-btn">Tirar foto ou escolher imagem<input type="file" id="inputFotoJoia" accept="image/*" capture="environment" onchange="selecionarFotoJoia(event)"></label>
+          <div class="photo-actions">
+            <label class="file-btn">Tirar foto<input type="file" id="inputFotoJoiaCamera" accept="image/*" capture="environment" onchange="selecionarFotoJoia(event)"></label>
+            <label class="file-btn">Abrir galeria<input type="file" id="inputFotoJoiaGaleria" accept="image/*" onchange="selecionarFotoJoia(event)"></label>
+          </div>
           <button class="btn-cancel small" type="button" onclick="removerFotoJoia()">Remover foto</button>
-          <p class="hint">A foto é comprimida e salva dentro do backup.</p>
         </div>
       </div>
       <div class="grid-2">
@@ -206,11 +207,29 @@
       <div class="form-group"><label>Nome completo *</label><input type="text" id="clienteNome" autocomplete="name"></div>
       <div class="grid-2">
         <div class="form-group"><label>Telefone</label><input type="tel" id="clienteTelefone" inputmode="tel" oninput="maskTelefone(this)"></div>
-        <div class="form-group"><label>UF</label><select id="clienteUF"></select></div>
+        <div class="form-group"><label>CEP</label><div class="inline-field"><input type="text" id="clienteCEP" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" oninput="maskCEP(this)" onblur="if(this.value.replace(/\D/g,'').length===8) buscarCepCliente()"><button type="button" class="btn-outline cep-btn" onclick="buscarCepCliente()">Buscar CEP</button></div></div>
       </div>
-      <div class="form-group"><label>Cidade</label><input type="text" id="clienteCidade"></div>
-      <div class="form-group"><label>Endereço para entrega</label><textarea id="clienteEndereco" rows="3"></textarea></div>
+      <div class="grid-2">
+        <div class="form-group"><label>Rua</label><input type="text" id="clienteRua" autocomplete="street-address"></div>
+        <div class="form-group"><label>Número</label><input type="text" id="clienteNumero" inputmode="numeric"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Bairro</label><input type="text" id="clienteBairro"></div>
+        <div class="form-group"><label>Cidade</label><input type="text" id="clienteCidade"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>UF</label><select id="clienteUF"></select></div>
+        <div class="form-group"><label>Complemento</label><input type="text" id="clienteComplemento"></div>
+      </div>
+      <div class="form-group"><label>Ponto de referência</label><input type="text" id="clientePontoReferencia" placeholder="Ex.: próximo à praça"></div>
       <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteForm')">Cancelar</button><button class="btn-action" onclick="salvarClienteForm()">Salvar cliente</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalClienteDetalhe" style="z-index:2150">
+    <div class="modal large-modal detail-modal">
+      <div class="modal-title"><span>Detalhes do cliente</span><button class="icon-btn" onclick="fecharModal('modalClienteDetalhe')">✖</button></div>
+      <div id="detalheClienteConteudo"></div>
     </div>
   </div>
 
@@ -365,6 +384,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=1.0.3" defer></script>
+  <script src="app.js?v=0.1" defer></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 PWA para controle de estoque, vendas, clientes, fotos e sincronização de joias.
 
 ## Versão
-v1.0.3
+v0.1
 
 ## Senha inicial
 - Usuário: **Administrador**
@@ -32,6 +32,8 @@ v1.0.3
 2. Cole o conteúdo de `backend-google-apps-script.gs`.
 3. Publique como Web App.
 4. Copie a URL `/exec` e cole no app em **Configurações > Avançado > URL do back-end**.
+
+Para a v0.1, depois de atualizar este repositório, copie novamente `backend-google-apps-script.gs` para o projeto do Apps Script e crie uma nova implantação/versão. A sincronização usa `LockService`, revisão do banco, horário do servidor Google e deltas de estoque para permitir alterações simultâneas em aparelhos diferentes.
 
 ## Observação sobre WhatsApp
 O envio direto de texto usa `wa.me`. Para imagem, o WhatsApp não permite que uma PWA anexe mídia automaticamente em uma conversa específica por número. O app gera o card, copia o texto e abre a conversa do número informado para anexar o card manualmente.

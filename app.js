@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.0.3";
+const APP_VERSION = "v0.1";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 const SYNC_PULL_INTERVAL_MS = 30000;
@@ -26,6 +26,8 @@ const TEMAS_PREDEFINIDOS = [
 
 const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
+let serverClockOffsetMs = 0;
+let localMutationVersion = 0;
 let db = carregarBanco();
 let adminLogado = null;
 let estado = { categoria: "todos", status: "todos", busca: "" };
@@ -35,11 +37,17 @@ let contextoNovoCliente = "";
 let isSyncingFundo = false;
 let syncTimer = null;
 let syncPendente = false;
+let cepLookupInProgress = false;
 
 function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
 function escapeHTML(valor) { return String(valor ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch])); }
-function getHojeSTR() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function agoraServidor() { return Date.now() + serverClockOffsetMs; }
+function atualizarRelogioServidor(serverNow) {
+  const valor = Number(serverNow || 0);
+  if(Number.isFinite(valor) && valor > 0) serverClockOffsetMs = valor - Date.now();
+}
+function getHojeSTR() { const d = new Date(agoraServidor()); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function getMesAtualSTR() { return getHojeSTR().slice(0, 7); }
 function formatDataBR(v) { if(!v) return ""; const p = String(v).split("-"); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : v; }
 function formatDateTime(ts) { if(!ts) return ""; return new Date(Number(ts)).toLocaleString("pt-BR"); }
@@ -54,6 +62,7 @@ function formatDecimal(valor, casas = 2) { return Number(valor || 0).toLocaleStr
 function maskMoeda(el) { let v = el.value.replace(/\D/g, ""); if(!v) { el.value = ""; return; } el.value = (parseFloat(v) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }); }
 function maskDecimal(el, casas = 3) { let v = el.value.replace(/[^\d,\.]/g, "").replace(".", ","); const partes = v.split(","); if(partes.length > 2) v = partes[0] + "," + partes.slice(1).join(""); if(partes[1] && partes[1].length > casas) v = partes[0] + "," + partes[1].slice(0, casas); el.value = v; }
 function maskTelefone(el) { let v = el.value.replace(/\D/g, ""); if(v.length > 11) v = v.slice(0, 11); v = v.replace(/^(\d{2})(\d)/, "($1) $2"); v = v.replace(/(\d{5})(\d{4})$/, "$1-$2"); el.value = v; }
+function maskCEP(el) { let v = el.value.replace(/\D/g, "").slice(0, 8); if(v.length > 5) v = `${v.slice(0,5)}-${v.slice(5)}`; el.value = v; }
 function abrirModal(id) { const el = qs(id); if(el) { el.style.display = "flex"; const modal = el.querySelector(".modal"); if(modal) modal.scrollTop = 0; } }
 function fecharModal(id) { const el = qs(id); if(el) el.style.display = "none"; }
 function setLoading(ativo, texto = "Processando...") { qs("loadingText").innerText = texto; qs("loadingOverlay").style.display = ativo ? "flex" : "none"; }
@@ -61,6 +70,15 @@ function getCategoria(id) { return (db.categorias || []).find(c => c.id === id) 
 function getCliente(id) { return (db.clientes || []).find(c => c.id === id) || null; }
 function getJoia(id) { return (db.joias || []).find(j => j.id === id) || null; }
 function getUsuarioAuditoria() { return adminLogado && adminLogado.nome ? adminLogado.nome : "Sistema"; }
+function montarEnderecoCliente(c = {}) {
+  const rua = [c.rua, c.numero].filter(Boolean).join(", ");
+  const local = [rua, c.bairro, c.cidade, c.uf].filter(Boolean).join(" - ");
+  const extras = [c.complemento, c.pontoReferencia].filter(Boolean).join(" · ");
+  return [c.cep, local, extras].filter(Boolean).join(" · ");
+}
+function enderecoClienteParaExibicao(c = {}) {
+  return montarEnderecoCliente(c) || c.enderecoEntrega || "sem endereço";
+}
 
 function criarBancoBase() {
   return {
@@ -73,7 +91,7 @@ function criarBancoBase() {
     administradores: [],
     auditoria: [],
     configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
-    configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
+    configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
     _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
   };
 }
@@ -131,9 +149,17 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!c.id) c.id = `cli_${normalizarTextoId(c.nomeCompleto || c.nome)}_${idx}`;
     c.nomeCompleto = c.nomeCompleto || c.nome || "";
     c.telefone = c.telefone || "";
+    c.cep = c.cep || "";
+    // Migração transparente do endereço antigo para o novo campo de rua.
+    c.rua = c.rua || c.enderecoEntrega || "";
+    c.numero = c.numero || "";
+    c.bairro = c.bairro || "";
     c.cidade = c.cidade || "";
     c.uf = c.uf || "PB";
-    c.enderecoEntrega = c.enderecoEntrega || "";
+    c.complemento = c.complemento || "";
+    c.pontoReferencia = c.pontoReferencia || "";
+    c.observacao = c.observacao || c.obs || "";
+    c.enderecoEntrega = c.enderecoEntrega || montarEnderecoCliente(c);
     c.updatedAt = Number(c.updatedAt || 0);
   });
 
@@ -159,7 +185,10 @@ function normalizarBanco(dados, base = criarBancoBase()) {
 function salvarBanco(opcoes = {}) {
   db.configs = { ...criarBancoBase().configs, ...(db.configs || {}) };
   db.configs.clientId = db.configs.clientId || getClientIdLocal();
-  if(opcoes.marcarLocal !== false) db.configs.ultimaMudancaLocal = Date.now();
+  if(opcoes.marcarLocal !== false) {
+    db.configs.ultimaMudancaLocal = agoraServidor();
+    localMutationVersion += 1;
+  }
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); }
   catch(e) { alert("Não foi possível salvar. As fotos podem estar grandes demais para o armazenamento local deste navegador."); throw e; }
   if(opcoes.sincronizar !== false) agendarSincronizacao();
@@ -167,7 +196,7 @@ function salvarBanco(opcoes = {}) {
 
 function marcarRegistroPendente(registro) {
   if(!registro) return registro;
-  const agora = Date.now();
+  const agora = agoraServidor();
   registro.updatedAt = agora;
   registro._clientDirty = true;
   registro._clientChangedAt = agora;
@@ -177,16 +206,21 @@ function marcarRegistroPendente(registro) {
 }
 
 function tocarRegistro(registro) { return marcarRegistroPendente(registro); }
+function registrarMovimentoEstoque(joia, delta) {
+  const valor = Number(delta || 0);
+  if(!joia || !Number.isFinite(valor) || valor === 0) return;
+  joia._inventoryDelta = Number(joia._inventoryDelta || 0) + valor;
+}
 
 function registrarExclusao(tipo, id) {
   if(!id) return;
   db._deleted = db._deleted || criarBancoBase()._deleted;
   db._deleted[tipo] = db._deleted[tipo] || {};
-  const agora = Date.now();
+  const agora = agoraServidor();
   db._deleted[tipo][id] = { id, tipo, deletedAt: agora, _clientDirty: true, _clientChangedAt: agora, _clientId: getClientIdLocal(), usuario: getUsuarioAuditoria() };
 }
 
-function filtrarAuditoriaRecente(lista, agora = Date.now()) {
+function filtrarAuditoriaRecente(lista, agora = agoraServidor()) {
   const limite = agora - AUDITORIA_RETENCAO_DIAS * 24 * 60 * 60 * 1000;
   return (Array.isArray(lista) ? lista : [])
     .filter(item => item && (item._clientDirty || !item.createdAt || Number(item.createdAt) >= limite))
@@ -196,7 +230,7 @@ function filtrarAuditoriaRecente(lista, agora = Date.now()) {
 
 function registrarAuditoria(acao, detalhes = "") {
   db.auditoria = Array.isArray(db.auditoria) ? db.auditoria : [];
-  const agora = Date.now();
+  const agora = agoraServidor();
   db.auditoria.push({ id: gerarIdLocal("audit"), acao, detalhes, usuario: getUsuarioAuditoria(), createdAt: agora, _clientDirty: true, _clientChangedAt: agora, _clientId: getClientIdLocal() });
   db.auditoria = filtrarAuditoriaRecente(db.auditoria, agora);
 }
@@ -475,7 +509,7 @@ function abrirFormularioJoia(id = "") {
   if(qs("joiaCliente")) preencherSelectClientes("joiaCliente", "", true);
   fotoJoiaTemp = "";
   qs("joiaId").value = id || "";
-  qs("inputFotoJoia").value = "";
+  limparInputsFotoJoia();
   if(id) {
     const j = getJoia(id); if(!j) return;
     qs("tituloJoiaForm").innerText = "Editar joia";
@@ -521,9 +555,16 @@ async function selecionarFotoJoia(event) {
     fotoJoiaTemp = await comprimirImagem(file, 1200, .82);
     atualizarPreviewFotoJoia();
   } catch(e) { alert("Não foi possível carregar a foto."); }
-  finally { setLoading(false); }
+  finally {
+    setLoading(false);
+    // Permite escolher novamente o mesmo arquivo ou alternar entre câmera e galeria.
+    if(event.target) event.target.value = "";
+  }
 }
-function removerFotoJoia() { fotoJoiaTemp = ""; qs("inputFotoJoia").value = ""; atualizarPreviewFotoJoia(); }
+function limparInputsFotoJoia() {
+  ["inputFotoJoiaCamera", "inputFotoJoiaGaleria"].forEach(id => { if(qs(id)) qs(id).value = ""; });
+}
+function removerFotoJoia() { fotoJoiaTemp = ""; limparInputsFotoJoia(); atualizarPreviewFotoJoia(); }
 
 function comprimirImagem(file, maxDim = 1200, qualidade = .82) {
   return new Promise((resolve, reject) => {
@@ -563,6 +604,7 @@ function salvarJoiaForm() {
   let joia = id ? getJoia(id) : null;
   const nova = !joia;
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
+  const quantidadeAnterior = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
   Object.assign(joia, {
     referencia,
     categoria,
@@ -577,6 +619,7 @@ function salvarJoiaForm() {
     obs: qs("joiaObs").value.trim(),
     foto: fotoJoiaTemp || ""
   });
+  registrarMovimentoEstoque(joia, quantidadeEstoque - quantidadeAnterior);
   if(status === "vendido" && !joia.dataVenda) joia.dataVenda = getHojeSTR();
   if(status !== "vendido") joia.dataVenda = "";
   tocarRegistro(joia);
@@ -794,12 +837,33 @@ function abrirClientes() { preencherUFSelect("clienteUF", "PB"); renderClientes(
 function renderClientes() {
   const q = (qs("buscaCliente")?.value || "").toLowerCase();
   let lista = [...(db.clientes || [])].sort((a,b) => String(a.nomeCompleto).localeCompare(String(b.nomeCompleto)));
-  if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cidade, c.uf, c.enderecoEntrega].join(" ").toLowerCase().includes(q));
+  if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.enderecoEntrega, c.observacao].join(" ").toLowerCase().includes(q));
   qs("listaClientes").innerHTML = lista.length ? lista.map(c => `
-    <div class="client-card">
-      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(c.enderecoEntrega || "sem endereço")}</small></div>
-      <div class="client-actions"><button onclick="abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
+    <div class="client-card" role="button" tabindex="0" onclick="abrirDetalheCliente('${escapeHTML(c.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); abrirDetalheCliente('${escapeHTML(c.id)}'); }">
+      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(enderecoClienteParaExibicao(c))}</small></div>
+      <div class="client-actions"><button onclick="event.stopPropagation(); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="event.stopPropagation(); excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
     </div>`).join("") : `<div class="empty-state" style="height:180px"><div>👥</div><strong>Nenhum cliente</strong></div>`;
+}
+
+async function buscarCepCliente() {
+  const cep = String(qs("clienteCEP")?.value || "").replace(/\D/g, "");
+  if(cep.length !== 8) return alert("Informe um CEP válido com 8 números.");
+  if(cepLookupInProgress) return;
+  cepLookupInProgress = true;
+  setLoading(true, "Buscando endereço...");
+  try {
+    const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { cache: "no-store" });
+    if(!res.ok) throw new Error("Falha ao consultar CEP");
+    const dados = await res.json();
+    if(dados.erro) return alert("CEP não encontrado.");
+    qs("clienteRua").value = dados.logradouro || "";
+    qs("clienteBairro").value = dados.bairro || "";
+    qs("clienteCidade").value = dados.localidade || "";
+    preencherUFSelect("clienteUF", dados.uf || "PB");
+    qs("clienteNumero").focus();
+  } catch(e) {
+    alert("Não foi possível consultar o CEP agora. Você pode preencher o endereço manualmente.");
+  } finally { cepLookupInProgress = false; setLoading(false); }
 }
 
 function abrirFormularioCliente(id = "", contexto = "") {
@@ -811,16 +875,19 @@ function abrirFormularioCliente(id = "", contexto = "") {
     qs("tituloClienteForm").innerText = "Editar cliente";
     qs("clienteNome").value = c.nomeCompleto || "";
     qs("clienteTelefone").value = c.telefone || "";
+    qs("clienteCEP").value = c.cep || "";
+    qs("clienteRua").value = c.rua || c.enderecoEntrega || "";
+    qs("clienteNumero").value = c.numero || "";
+    qs("clienteBairro").value = c.bairro || "";
     qs("clienteCidade").value = c.cidade || "";
     preencherUFSelect("clienteUF", c.uf || "PB");
-    qs("clienteEndereco").value = c.enderecoEntrega || "";
+    qs("clienteComplemento").value = c.complemento || "";
+    qs("clientePontoReferencia").value = c.pontoReferencia || "";
   } else {
     qs("tituloClienteForm").innerText = "Cadastrar cliente";
-    qs("clienteNome").value = "";
-    qs("clienteTelefone").value = "";
+    ["clienteNome","clienteTelefone","clienteCEP","clienteRua","clienteNumero","clienteBairro","clienteComplemento","clientePontoReferencia"].forEach(idCampo => { qs(idCampo).value = ""; });
     qs("clienteCidade").value = db.loja?.cidade || "";
     preencherUFSelect("clienteUF", db.loja?.uf || "PB");
-    qs("clienteEndereco").value = "";
   }
   abrirModal("modalClienteForm");
 }
@@ -832,7 +899,19 @@ function salvarClienteForm() {
   let c = id ? getCliente(id) : null;
   const novo = !c;
   if(!c) { c = { id: gerarIdLocal("cli"), dataCadastro: getHojeSTR() }; db.clientes.push(c); }
-  Object.assign(c, { nomeCompleto: nome, telefone: qs("clienteTelefone").value.trim(), cidade: qs("clienteCidade").value.trim(), uf: qs("clienteUF").value, enderecoEntrega: qs("clienteEndereco").value.trim() });
+  Object.assign(c, {
+    nomeCompleto: nome,
+    telefone: qs("clienteTelefone").value.trim(),
+    cep: qs("clienteCEP").value.trim(),
+    rua: qs("clienteRua").value.trim(),
+    numero: qs("clienteNumero").value.trim(),
+    bairro: qs("clienteBairro").value.trim(),
+    cidade: qs("clienteCidade").value.trim(),
+    uf: qs("clienteUF").value,
+    complemento: qs("clienteComplemento").value.trim(),
+    pontoReferencia: qs("clientePontoReferencia").value.trim()
+  });
+  c.enderecoEntrega = montarEnderecoCliente(c);
   tocarRegistro(c);
   registrarAuditoria(novo ? "Cliente cadastrado" : "Cliente alterado", nome);
   salvarBanco();
@@ -844,6 +923,35 @@ function salvarClienteForm() {
   if(contextoNovoCliente === "venda") qs("vendaCliente").value = c.id;
   if(contextoNovoCliente === "reserva") qs("reservaCliente").value = c.id;
   contextoNovoCliente = "";
+}
+
+function abrirDetalheCliente(id) {
+  const c = getCliente(id); if(!c) return;
+  const compras = (db.vendas || []).filter(v => v.clienteId === id).sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
+  const joiasRelacionadas = (db.joias || []).filter(j => j.clienteId === id);
+  qs("detalheClienteConteudo").innerHTML = `
+    <div class="client-detail-header"><div class="client-avatar">👤</div><div><h2>${escapeHTML(c.nomeCompleto)}</h2><p>${escapeHTML(c.telefone || "Sem telefone")}</p></div></div>
+    <div class="detail-grid client-detail-grid">
+      <div class="detail-box"><small>CEP</small><strong>${escapeHTML(c.cep || "-")}</strong></div>
+      <div class="detail-box"><small>Cidade / UF</small><strong>${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - ") || "-")}</strong></div>
+      <div class="detail-box"><small>Cadastro</small><strong>${escapeHTML(formatDataBR(c.dataCadastro) || "-")}</strong></div>
+    </div>
+    <div class="client-address-box"><small>Endereço</small><p>${escapeHTML(enderecoClienteParaExibicao(c))}</p></div>
+    <div class="form-group client-observation"><label for="clienteDetalheObservacao">Observação</label><textarea id="clienteDetalheObservacao" rows="4" placeholder="Anotações sobre este cliente...">${escapeHTML(c.observacao || "")}</textarea><button class="btn-outline" onclick="salvarObservacaoCliente('${escapeHTML(c.id)}')">Salvar observação</button></div>
+    <div class="section-title">Histórico de compras</div>
+    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(v.valorVenda)} · ${escapeHTML(v.formaPagamento || "forma não informada")}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
+    ${joiasRelacionadas.length ? `<div class="section-title">Joias reservadas ou vinculadas</div>${joiasRelacionadas.map(j => `<div class="sale-card"><strong>${escapeHTML(j.referencia || "Joia")}</strong><small>${escapeHTML(j.status || "")} · ${formatMoeda(j.precoVenda)}</small></div>`).join("")}` : ""}
+    <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteDetalhe')">Fechar</button><button class="btn-action" onclick="fecharModal('modalClienteDetalhe'); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar cliente</button></div>`;
+  abrirModal("modalClienteDetalhe");
+}
+
+function salvarObservacaoCliente(id) {
+  const c = getCliente(id); if(!c) return;
+  c.observacao = qs("clienteDetalheObservacao").value.trim();
+  tocarRegistro(c);
+  registrarAuditoria("Observação de cliente alterada", c.nomeCompleto);
+  salvarBanco();
+  abrirDetalheCliente(id);
 }
 
 function excluirCliente(id) {
@@ -890,6 +998,7 @@ function salvarVenda() {
   tocarRegistro(venda);
   db.vendas.push(venda);
   joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
+  registrarMovimentoEstoque(joia, -qtdSolicitada);
   joia.status = joia.quantidadeEstoque > 0 ? "disponível" : "vendido";
   joia.clienteId = clienteId;
   joia.dataVenda = venda.data;
@@ -926,7 +1035,7 @@ function salvarReserva() {
 function liberarReserva(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   j.status = "disponível";
-  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) j.quantidadeEstoque = 1;
+  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) { j.quantidadeEstoque = 1; registrarMovimentoEstoque(j, 1); }
   j.clienteId = "";
   j.reservaObs = "";
   tocarRegistro(j);
@@ -940,7 +1049,7 @@ function voltarJoiaEstoque(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   if(!confirm("Voltar esta joia para o estoque? O histórico da venda será mantido.")) return;
   j.status = "disponível";
-  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) j.quantidadeEstoque = 1;
+  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) { j.quantidadeEstoque = 1; registrarMovimentoEstoque(j, 1); }
   j.clienteId = "";
   j.dataVenda = "";
   tocarRegistro(j);
@@ -1264,8 +1373,8 @@ function exportarCSV(tipo) {
     rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
     (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
-    rows = [["nome_completo","telefone","cidade","uf","endereco_entrega"]];
-    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cidade, c.uf, c.enderecoEntrega]));
+    rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","observacao"]];
+    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.observacao]));
   } else if(tipo === "vendas") {
     rows = [["data","referencia","cliente","quantidade","valor_venda","forma_pagamento","observacao"]];
     (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
@@ -1306,9 +1415,28 @@ function temMudancaLocalPendente() {
 }
 
 function tombstoneTempo(valor) { return valor && typeof valor === "object" ? Number(valor.deletedAt || valor._clientChangedAt || 0) : Number(valor || 0); }
-function objetoMaisNovo(a,b) { if(!a) return b || {}; if(!b) return a || {}; const ta = Number(a.updatedAt || a._clientChangedAt || a._serverUpdatedAt || 0); const tb = Number(b.updatedAt || b._clientChangedAt || b._serverUpdatedAt || 0); return tb >= ta ? b : a; }
-function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; out[tipo][id] = tombstoneTempo(bb[id]) >= tombstoneTempo(old) ? bb[id] : old; }); }); return out; }
-function mesclarListaPorData(atual = [], nova = [], excluidos = {}) { const map = {}; atual.concat(nova).forEach(item => { if(!item) return; const key = item.id || item.referencia || item.nome; if(!key) return; map[key] = objetoMaisNovo(map[key], item); }); return Object.keys(map).filter(id => !excluidos[id] || tombstoneTempo(excluidos[id]) < Number(map[id].updatedAt || 0)).map(id => map[id]); }
+function objetoMaisNovo(a,b) {
+  if(!a) return b || {};
+  if(!b) return a || {};
+  if(a._clientDirty && !b._clientDirty) return a;
+  if(b._clientDirty && !a._clientDirty) return b;
+  const ta = Number(a._serverUpdatedAt || a.updatedAt || a._clientChangedAt || 0);
+  const tb = Number(b._serverUpdatedAt || b.updatedAt || b._clientChangedAt || 0);
+  return tb >= ta ? b : a;
+}
+function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; if(old?._clientDirty && !bb[id]?._clientDirty) return; if(bb[id]?._clientDirty || tombstoneTempo(bb[id]) >= tombstoneTempo(old)) out[tipo][id] = bb[id]; }); }); return out; }
+function mesclarListaPorData(atual = [], nova = [], excluidos = {}) {
+  const map = {};
+  atual.concat(nova).forEach(item => {
+    if(!item) return;
+    const key = item.id || item.referencia || item.nome;
+    if(!key) return;
+    map[key] = objetoMaisNovo(map[key], item);
+  });
+  return Object.keys(map)
+    .filter(id => !excluidos[id] || tombstoneTempo(excluidos[id]) < Number(map[id].updatedAt || map[id]._serverUpdatedAt || 0))
+    .map(id => map[id]);
+}
 function mesclarBancosPorData(local, nuvem) {
   local = normalizarBanco(local); nuvem = normalizarBanco(nuvem);
   const merged = normalizarBanco({ ...local });
@@ -1332,11 +1460,12 @@ function mesclarBancosPorData(local, nuvem) {
 
 function aplicarBancoAtualizado(novoBanco, opcoes = {}) {
   if(!validarBancoImportado(novoBanco)) return false;
+  atualizarRelogioServidor(novoBanco._serverNow || novoBanco.configs?.serverNow || novoBanco.configs?.ultimaSincronizacao);
   const urlSalva = db.configs?.url || "";
   db = normalizarBanco(novoBanco);
   if(urlSalva) db.configs.url = urlSalva;
   db.configs.somenteLocal = !db.configs.url;
-  db.configs.ultimaSincronizacao = Date.now();
+  db.configs.ultimaSincronizacao = Number(novoBanco._serverNow || novoBanco.configs?.serverNow || novoBanco.configs?.ultimaSincronizacao || agoraServidor());
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   if(opcoes.render !== false) renderTudo();
   return true;
@@ -1354,6 +1483,7 @@ async function salvarURLComValor(inputUrl, origem = "inicial") {
     const res = await fetch(fetchUrl, { redirect: "follow", cache: "no-store" });
     if(!res.ok) throw new Error("Falha ao buscar dados");
     let dadosNuvem = await res.json();
+    atualizarRelogioServidor(dadosNuvem?._serverNow || dadosNuvem?.configs?.serverNow || dadosNuvem?.configs?.ultimaSincronizacao);
     if(!validarBancoImportado(dadosNuvem)) {
       const base = criarBancoBase();
       base.configs.url = inputUrl;
@@ -1386,18 +1516,23 @@ async function sincronizarFundo(forcado = false, apenasEmpurrar = false) {
   isSyncingFundo = true;
   qs("syncIndicador").style.opacity = "1";
   try {
-    const localAntes = JSON.parse(JSON.stringify(db));
+    const versaoLocalAntes = localMutationVersion;
     const res = await fetch(db.configs.url, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "salvar_banco", dados: db, baseRevision: db.configs.syncRevision || 0 }) });
     if(!res.ok) throw new Error("Falha ao salvar na nuvem");
     const retorno = await res.json().catch(() => null);
+    if(!retorno || retorno.ok !== true) throw new Error(retorno?.erro || "Resposta inválida do back-end");
+    atualizarRelogioServidor(retorno?.serverNow || retorno?.dados?._serverNow || retorno?.dados?.configs?.serverNow);
     if(retorno && retorno.ok && retorno.dados && validarBancoImportado(retorno.dados)) {
-      const mesclado = mesclarBancosPorData(localAntes, retorno.dados);
-      mesclado.configs.url = db.configs.url;
-      mesclado.configs.ultimaSincronizacao = Date.now();
-      aplicarBancoAtualizado(mesclado);
+      // Se nada mudou durante o request, a resposta do servidor é autoritativa.
+      // Se houve uma edição enquanto a rede estava ocupada, preservamos somente
+      // essas edições novas para o próximo envio.
+      const posRequest = localMutationVersion === versaoLocalAntes ? retorno.dados : mesclarBancosPorData(db, retorno.dados);
+      posRequest.configs.url = db.configs.url;
+      posRequest.configs.ultimaSincronizacao = Number(retorno.serverNow || retorno.dados._serverNow || retorno.dados.configs?.serverNow || agoraServidor());
+      aplicarBancoAtualizado(posRequest);
     } else if(retorno && retorno.ok) {
       db.configs.syncRevision = retorno.revision || db.configs.syncRevision || 0;
-      db.configs.ultimaSincronizacao = Date.now();
+      db.configs.ultimaSincronizacao = Number(retorno.serverNow || agoraServidor());
       localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
     }
     renderSyncInfoSafe();
@@ -1420,6 +1555,7 @@ async function puxarDadosNuvem(silencioso = true) {
     if(!res.ok) throw new Error("Falha ao puxar dados");
     let nuvem = await res.json();
     if(!validarBancoImportado(nuvem)) return;
+    atualizarRelogioServidor(nuvem._serverNow || nuvem.configs?.serverNow || nuvem.configs?.ultimaSincronizacao);
     nuvem = normalizarBanco(nuvem);
     if(Number(nuvem.configs.syncRevision || 0) <= Number(db.configs.syncRevision || 0)) { if(!silencioso) alert("Você já está com a versão mais recente."); return; }
     nuvem.configs.url = db.configs.url;

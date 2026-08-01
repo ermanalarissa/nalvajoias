@@ -1,4 +1,4 @@
-const APP_VERSION = "v1.0.2";
+const APP_VERSION = "v0.1";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 const SYNC_PULL_INTERVAL_MS = 30000;
@@ -26,6 +26,8 @@ const TEMAS_PREDEFINIDOS = [
 
 const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
+let serverClockOffsetMs = 0;
+let localMutationVersion = 0;
 let db = carregarBanco();
 let adminLogado = null;
 let estado = { categoria: "todos", status: "todos", busca: "" };
@@ -35,11 +37,17 @@ let contextoNovoCliente = "";
 let isSyncingFundo = false;
 let syncTimer = null;
 let syncPendente = false;
+let cepLookupInProgress = false;
 
 function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
 function escapeHTML(valor) { return String(valor ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch])); }
-function getHojeSTR() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function agoraServidor() { return Date.now() + serverClockOffsetMs; }
+function atualizarRelogioServidor(serverNow) {
+  const valor = Number(serverNow || 0);
+  if(Number.isFinite(valor) && valor > 0) serverClockOffsetMs = valor - Date.now();
+}
+function getHojeSTR() { const d = new Date(agoraServidor()); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function getMesAtualSTR() { return getHojeSTR().slice(0, 7); }
 function formatDataBR(v) { if(!v) return ""; const p = String(v).split("-"); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : v; }
 function formatDateTime(ts) { if(!ts) return ""; return new Date(Number(ts)).toLocaleString("pt-BR"); }
@@ -54,6 +62,7 @@ function formatDecimal(valor, casas = 2) { return Number(valor || 0).toLocaleStr
 function maskMoeda(el) { let v = el.value.replace(/\D/g, ""); if(!v) { el.value = ""; return; } el.value = (parseFloat(v) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }); }
 function maskDecimal(el, casas = 3) { let v = el.value.replace(/[^\d,\.]/g, "").replace(".", ","); const partes = v.split(","); if(partes.length > 2) v = partes[0] + "," + partes.slice(1).join(""); if(partes[1] && partes[1].length > casas) v = partes[0] + "," + partes[1].slice(0, casas); el.value = v; }
 function maskTelefone(el) { let v = el.value.replace(/\D/g, ""); if(v.length > 11) v = v.slice(0, 11); v = v.replace(/^(\d{2})(\d)/, "($1) $2"); v = v.replace(/(\d{5})(\d{4})$/, "$1-$2"); el.value = v; }
+function maskCEP(el) { let v = el.value.replace(/\D/g, "").slice(0, 8); if(v.length > 5) v = `${v.slice(0,5)}-${v.slice(5)}`; el.value = v; }
 function abrirModal(id) { const el = qs(id); if(el) { el.style.display = "flex"; const modal = el.querySelector(".modal"); if(modal) modal.scrollTop = 0; } }
 function fecharModal(id) { const el = qs(id); if(el) el.style.display = "none"; }
 function setLoading(ativo, texto = "Processando...") { qs("loadingText").innerText = texto; qs("loadingOverlay").style.display = ativo ? "flex" : "none"; }
@@ -61,6 +70,15 @@ function getCategoria(id) { return (db.categorias || []).find(c => c.id === id) 
 function getCliente(id) { return (db.clientes || []).find(c => c.id === id) || null; }
 function getJoia(id) { return (db.joias || []).find(j => j.id === id) || null; }
 function getUsuarioAuditoria() { return adminLogado && adminLogado.nome ? adminLogado.nome : "Sistema"; }
+function montarEnderecoCliente(c = {}) {
+  const rua = [c.rua, c.numero].filter(Boolean).join(", ");
+  const local = [rua, c.bairro, c.cidade, c.uf].filter(Boolean).join(" - ");
+  const extras = [c.complemento, c.pontoReferencia].filter(Boolean).join(" · ");
+  return [c.cep, local, extras].filter(Boolean).join(" · ");
+}
+function enderecoClienteParaExibicao(c = {}) {
+  return montarEnderecoCliente(c) || c.enderecoEntrega || "sem endereço";
+}
 
 function criarBancoBase() {
   return {
@@ -73,7 +91,7 @@ function criarBancoBase() {
     administradores: [],
     auditoria: [],
     configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
-    configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
+    configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
     _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
   };
 }
@@ -119,6 +137,10 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     j.precoCompra = Number(j.precoCompra || 0);
     j.precoVenda = Number(j.precoVenda || 0);
     j.status = ["disponível","reservado","vendido"].includes(j.status) ? j.status : "disponível";
+    const qtdInformada = Number(j.quantidadeEstoque);
+    j.quantidadeEstoque = Number.isFinite(qtdInformada) ? Math.max(0, Math.floor(qtdInformada)) : (j.status === "vendido" ? 0 : 1);
+    j.quantidadeInicial = Math.max(Number(j.quantidadeInicial || 0), j.quantidadeEstoque, j.status === "vendido" ? 1 : 0);
+    j.dataEntrada = j.dataEntrada || j.dataCadastro || getHojeSTR();
     j.foto = j.foto || "";
     j.updatedAt = Number(j.updatedAt || 0);
   });
@@ -127,9 +149,17 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!c.id) c.id = `cli_${normalizarTextoId(c.nomeCompleto || c.nome)}_${idx}`;
     c.nomeCompleto = c.nomeCompleto || c.nome || "";
     c.telefone = c.telefone || "";
+    c.cep = c.cep || "";
+    // Migração transparente do endereço antigo para o novo campo de rua.
+    c.rua = c.rua || c.enderecoEntrega || "";
+    c.numero = c.numero || "";
+    c.bairro = c.bairro || "";
     c.cidade = c.cidade || "";
     c.uf = c.uf || "PB";
-    c.enderecoEntrega = c.enderecoEntrega || "";
+    c.complemento = c.complemento || "";
+    c.pontoReferencia = c.pontoReferencia || "";
+    c.observacao = c.observacao || c.obs || "";
+    c.enderecoEntrega = c.enderecoEntrega || montarEnderecoCliente(c);
     c.updatedAt = Number(c.updatedAt || 0);
   });
 
@@ -137,6 +167,7 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!v.id) v.id = `venda_${normalizarTextoId(v.joiaId)}_${idx}`;
     v.data = v.data || getHojeSTR();
     v.valorVenda = Number(v.valorVenda || 0);
+    v.quantidade = Math.max(1, Math.floor(Number(v.quantidade || 1)));
     v.updatedAt = Number(v.updatedAt || 0);
   });
 
@@ -154,7 +185,10 @@ function normalizarBanco(dados, base = criarBancoBase()) {
 function salvarBanco(opcoes = {}) {
   db.configs = { ...criarBancoBase().configs, ...(db.configs || {}) };
   db.configs.clientId = db.configs.clientId || getClientIdLocal();
-  if(opcoes.marcarLocal !== false) db.configs.ultimaMudancaLocal = Date.now();
+  if(opcoes.marcarLocal !== false) {
+    db.configs.ultimaMudancaLocal = agoraServidor();
+    localMutationVersion += 1;
+  }
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); }
   catch(e) { alert("Não foi possível salvar. As fotos podem estar grandes demais para o armazenamento local deste navegador."); throw e; }
   if(opcoes.sincronizar !== false) agendarSincronizacao();
@@ -162,7 +196,7 @@ function salvarBanco(opcoes = {}) {
 
 function marcarRegistroPendente(registro) {
   if(!registro) return registro;
-  const agora = Date.now();
+  const agora = agoraServidor();
   registro.updatedAt = agora;
   registro._clientDirty = true;
   registro._clientChangedAt = agora;
@@ -172,16 +206,21 @@ function marcarRegistroPendente(registro) {
 }
 
 function tocarRegistro(registro) { return marcarRegistroPendente(registro); }
+function registrarMovimentoEstoque(joia, delta) {
+  const valor = Number(delta || 0);
+  if(!joia || !Number.isFinite(valor) || valor === 0) return;
+  joia._inventoryDelta = Number(joia._inventoryDelta || 0) + valor;
+}
 
 function registrarExclusao(tipo, id) {
   if(!id) return;
   db._deleted = db._deleted || criarBancoBase()._deleted;
   db._deleted[tipo] = db._deleted[tipo] || {};
-  const agora = Date.now();
+  const agora = agoraServidor();
   db._deleted[tipo][id] = { id, tipo, deletedAt: agora, _clientDirty: true, _clientChangedAt: agora, _clientId: getClientIdLocal(), usuario: getUsuarioAuditoria() };
 }
 
-function filtrarAuditoriaRecente(lista, agora = Date.now()) {
+function filtrarAuditoriaRecente(lista, agora = agoraServidor()) {
   const limite = agora - AUDITORIA_RETENCAO_DIAS * 24 * 60 * 60 * 1000;
   return (Array.isArray(lista) ? lista : [])
     .filter(item => item && (item._clientDirty || !item.createdAt || Number(item.createdAt) >= limite))
@@ -191,7 +230,7 @@ function filtrarAuditoriaRecente(lista, agora = Date.now()) {
 
 function registrarAuditoria(acao, detalhes = "") {
   db.auditoria = Array.isArray(db.auditoria) ? db.auditoria : [];
-  const agora = Date.now();
+  const agora = agoraServidor();
   db.auditoria.push({ id: gerarIdLocal("audit"), acao, detalhes, usuario: getUsuarioAuditoria(), createdAt: agora, _clientDirty: true, _clientChangedAt: agora, _clientId: getClientIdLocal() });
   db.auditoria = filtrarAuditoriaRecente(db.auditoria, agora);
 }
@@ -346,26 +385,32 @@ function renderCabecalho() {
 
 function calcularResumo(mesRef = getMesAtualSTR()) {
   const joias = db.joias || [];
-  const estoque = joias.filter(j => j.status !== "vendido");
-  const disponiveis = joias.filter(j => j.status === "disponível");
-  const reservadas = joias.filter(j => j.status === "reservado");
-  const vendidas = joias.filter(j => j.status === "vendido");
-  const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0), 0);
-  const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0), 0);
-  const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0), 0);
+  const getQtd = (j) => Math.max(0, Math.floor(Number(j.quantidadeEstoque || 0)));
+  const estoque = joias.filter(j => j.status !== "vendido" && getQtd(j) > 0);
+  const disponiveis = joias.filter(j => j.status === "disponível" && getQtd(j) > 0);
+  const reservadas = joias.filter(j => j.status === "reservado" && getQtd(j) > 0);
+  const vendidasJoias = joias.filter(j => j.status === "vendido" || getQtd(j) === 0);
+  const estoqueQtd = estoque.reduce((s,j) => s + getQtd(j), 0);
+  const disponiveisQtd = disponiveis.reduce((s,j) => s + getQtd(j), 0);
+  const reservadasQtd = reservadas.reduce((s,j) => s + getQtd(j), 0);
+  const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0) * getQtd(j), 0);
+  const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0) * getQtd(j), 0);
+  const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0) * getQtd(j), 0);
   const vendas = db.vendas || [];
   const receitaVendida = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const qtdVendidaTotal = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
   const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
   const receitaMes = vendasMes.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
-  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0); }, 0);
-  const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0); }, 0);
+  const qtdVendidaMes = vendasMes.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
+  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
+  const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
   const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
   const margemRealMes = receitaMes - custoVendidoMes;
   const mesAnterior = deslocarMes(mesRef, -1);
   const vendasMesAnterior = vendas.filter(v => String(v.data || "").slice(0,7) === mesAnterior);
   const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
   const variacaoMes = receitaMesAnterior ? ((receitaMes - receitaMesAnterior) / receitaMesAnterior) * 100 : (receitaMes ? 100 : 0);
-  return { total: joias.length, estoque: estoque.length, disponiveis: disponiveis.length, reservadas: reservadas.length, vendidas: vendidas.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
+  return { total: joias.length, totalUnidades: estoqueQtd + qtdVendidaTotal, estoque: estoqueQtd, estoqueItens: estoque.length, disponiveis: disponiveisQtd, reservadas: reservadasQtd, vendidas: qtdVendidaTotal, vendidasJoias: vendidasJoias.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, qtdVendidaMes, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
 }
 
 function renderResumoTopo() {
@@ -433,7 +478,7 @@ function renderLista() {
             <div class="product-title">${escapeHTML(titulo)}</div>
             <span class="status-badge status-${escapeHTML(j.status)}">${escapeHTML(j.status)}</span>
           </div>
-          <div class="product-meta">Ref. ${escapeHTML(j.referencia || "-")} · ${escapeHTML(cat.nome)}<br>${formatDecimal(j.pesoOuro,3)} g de ouro${cliente ? ` · ${escapeHTML(cliente.nomeCompleto)}` : ""}</div>
+          <div class="product-meta">Ref. ${escapeHTML(j.referencia || "-")} · ${escapeHTML(cat.nome)}<br>${formatDecimal(j.pesoOuro,3)} g de ouro · estoque ${Math.max(0, Number(j.quantidadeEstoque || 0))}${cliente ? ` · ${escapeHTML(cliente.nomeCompleto)}` : ""}</div>
           <div class="product-price"><strong>${formatMoeda(j.precoVenda)}</strong><small>${formatDecimal(j.pesoOuro,3)} g</small></div>
         </div>
       </article>`;
@@ -461,10 +506,10 @@ function preencherSelectClientes(selectId, valor = "", incluirVazio = true) {
 
 function abrirFormularioJoia(id = "") {
   preencherSelectCategorias();
-  preencherSelectClientes("joiaCliente", "", true);
+  if(qs("joiaCliente")) preencherSelectClientes("joiaCliente", "", true);
   fotoJoiaTemp = "";
   qs("joiaId").value = id || "";
-  qs("inputFotoJoia").value = "";
+  limparInputsFotoJoia();
   if(id) {
     const j = getJoia(id); if(!j) return;
     qs("tituloJoiaForm").innerText = "Editar joia";
@@ -474,8 +519,10 @@ function abrirFormularioJoia(id = "") {
     qs("joiaPeso").value = j.pesoOuro ? formatDecimal(j.pesoOuro,3) : "";
     qs("joiaCompra").value = j.precoCompra ? formatMoedaSem(j.precoCompra) : "";
     qs("joiaVenda").value = j.precoVenda ? formatMoedaSem(j.precoVenda) : "";
+    qs("joiaQuantidade").value = Math.max(0, Number(j.quantidadeEstoque || 0));
+    qs("joiaDataEntrada").value = j.dataEntrada || j.dataCadastro || getHojeSTR();
     qs("joiaStatus").value = j.status || "disponível";
-    preencherSelectClientes("joiaCliente", j.clienteId || "", true);
+    if(qs("joiaCliente")) preencherSelectClientes("joiaCliente", j.clienteId || "", true);
     qs("joiaObs").value = j.obs || "";
     fotoJoiaTemp = j.foto || "";
   } else {
@@ -486,8 +533,10 @@ function abrirFormularioJoia(id = "") {
     qs("joiaPeso").value = "";
     qs("joiaCompra").value = "";
     qs("joiaVenda").value = "";
+    qs("joiaQuantidade").value = "1";
+    qs("joiaDataEntrada").value = getHojeSTR();
     qs("joiaStatus").value = "disponível";
-    qs("joiaCliente").value = "";
+    if(qs("joiaCliente")) qs("joiaCliente").value = "";
     qs("joiaObs").value = "";
   }
   atualizarPreviewFotoJoia();
@@ -506,9 +555,16 @@ async function selecionarFotoJoia(event) {
     fotoJoiaTemp = await comprimirImagem(file, 1200, .82);
     atualizarPreviewFotoJoia();
   } catch(e) { alert("Não foi possível carregar a foto."); }
-  finally { setLoading(false); }
+  finally {
+    setLoading(false);
+    // Permite escolher novamente o mesmo arquivo ou alternar entre câmera e galeria.
+    if(event.target) event.target.value = "";
+  }
 }
-function removerFotoJoia() { fotoJoiaTemp = ""; qs("inputFotoJoia").value = ""; atualizarPreviewFotoJoia(); }
+function limparInputsFotoJoia() {
+  ["inputFotoJoiaCamera", "inputFotoJoiaGaleria"].forEach(id => { if(qs(id)) qs(id).value = ""; });
+}
+function removerFotoJoia() { fotoJoiaTemp = ""; limparInputsFotoJoia(); atualizarPreviewFotoJoia(); }
 
 function comprimirImagem(file, maxDim = 1200, qualidade = .82) {
   return new Promise((resolve, reject) => {
@@ -541,14 +597,14 @@ function salvarJoiaForm() {
   const categoria = qs("joiaCategoria").value;
   if(!referencia) return alert("Informe a referência da joia.");
   if(!categoria) return alert("Selecione a categoria.");
-  const status = qs("joiaStatus").value;
-  const clienteId = qs("joiaCliente").value;
-  if((status === "vendido" || status === "reservado") && !clienteId) {
-    if(!confirm("A joia está sem cliente vinculado. Deseja salvar mesmo assim?")) return;
-  }
+  let status = qs("joiaStatus").value;
+  let quantidadeEstoque = Math.max(0, Math.floor(Number(qs("joiaQuantidade").value || 0)));
+  if(status === "vendido") quantidadeEstoque = 0;
+  if(quantidadeEstoque <= 0) status = "vendido";
   let joia = id ? getJoia(id) : null;
   const nova = !joia;
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
+  const quantidadeAnterior = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
   Object.assign(joia, {
     referencia,
     categoria,
@@ -556,11 +612,14 @@ function salvarJoiaForm() {
     pesoOuro: parseDecimal(qs("joiaPeso").value),
     precoCompra: parseMoeda(qs("joiaCompra").value),
     precoVenda: parseMoeda(qs("joiaVenda").value),
+    quantidadeEstoque,
+    quantidadeInicial: Math.max(Number(joia.quantidadeInicial || 0), quantidadeEstoque),
+    dataEntrada: qs("joiaDataEntrada").value || getHojeSTR(),
     status,
-    clienteId,
     obs: qs("joiaObs").value.trim(),
     foto: fotoJoiaTemp || ""
   });
+  registrarMovimentoEstoque(joia, quantidadeEstoque - quantidadeAnterior);
   if(status === "vendido" && !joia.dataVenda) joia.dataVenda = getHojeSTR();
   if(status !== "vendido") joia.dataVenda = "";
   tocarRegistro(joia);
@@ -588,19 +647,21 @@ function abrirDetalheJoia(id) {
       </div>
     </div>
     <div class="detail-grid">
+      <div class="detail-box"><small>Estoque</small><strong>${Math.max(0, Number(j.quantidadeEstoque || 0))}</strong></div>
       <div class="detail-box"><small>Peso ouro</small><strong>${formatDecimal(j.pesoOuro,3)} g</strong></div>
       <div class="detail-box"><small>Compra</small><strong>${formatMoeda(j.precoCompra)}</strong></div>
       <div class="detail-box"><small>Venda</small><strong>${formatMoeda(j.precoVenda)}</strong></div>
-      <div class="detail-box"><small>Margem</small><strong>${formatMoeda(lucro)}</strong></div>
+      <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>
+      <div class="detail-box"><small>Entrada</small><strong>${formatDataBR(j.dataEntrada || j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Cadastro</small><strong>${formatDataBR(j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Atualizado</small><strong>${formatDateTime(j.updatedAt)}</strong></div>
     </div>
-    ${vendas.length ? `<div class="section-title">Histórico de venda</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : ""}
+    ${vendas.length ? `<div class="section-title">Histórico de venda deste item</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : `<div class="section-title">Histórico de venda deste item</div><p class="hint">Nenhuma venda registrada para este item.</p>`}
     <div class="detail-actions">
       <button class="btn-outline" onclick="fecharModal('modalJoiaDetalhe'); abrirFormularioJoia('${escapeHTML(j.id)}')">Editar</button>
       <button class="btn-outline" onclick="duplicarJoia('${escapeHTML(j.id)}')">Duplicar</button>
       <button class="btn-outline" onclick="abrirCompartilharJoia('${escapeHTML(j.id)}')">Enviar WhatsApp</button>
-      ${j.status !== "vendido" ? `<button class="btn-action" onclick="abrirVenda('${escapeHTML(j.id)}')">Registrar venda</button>` : `<button class="btn-action" onclick="voltarJoiaEstoque('${escapeHTML(j.id)}')">Voltar ao estoque</button>`}
+      ${Math.max(0, Number(j.quantidadeEstoque || 0)) > 0 ? `<button class="btn-action" onclick="abrirVenda('${escapeHTML(j.id)}')">Registrar venda</button>` : `<button class="btn-action" onclick="voltarJoiaEstoque('${escapeHTML(j.id)}')">Voltar ao estoque</button>`}
       ${j.status !== "reservado" && j.status !== "vendido" ? `<button class="btn-outline" onclick="abrirReserva('${escapeHTML(j.id)}')">Reservar</button>` : `<button class="btn-outline" onclick="liberarReserva('${escapeHTML(j.id)}')">Liberar reserva</button>`}
       <button class="btn-danger full-row" onclick="excluirJoia('${escapeHTML(j.id)}')">Excluir joia</button>
     </div>
@@ -718,32 +779,41 @@ function drawImageCover(ctx, img, x, y, w, h, r = 0) {
 async function compartilharJoiaImagemWhatsapp() {
   const alvo = getDestinoWhatsappShare(); if(!alvo) return;
   if(!alvo.tel && !confirm("Nenhum WhatsApp foi informado. Gerar a imagem mesmo assim?")) return;
-  setLoading(true, "Gerando imagem da joia...");
+  setLoading(true, "Gerando card da joia...");
   try {
     const blob = await gerarCartaoJoiaBlob(alvo.j);
     const file = new File([blob], `${normalizarTextoId(alvo.j.referencia || "joia")}.jpg`, { type: "image/jpeg" });
     await copiarTextoCompartilhamento(alvo.texto);
+    if(alvo.tel) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1200);
+      alert("O card da joia foi gerado e o texto foi copiado. Vou abrir a conversa do número informado. Pelo navegador, o WhatsApp não permite anexar imagem automaticamente para um número específico. Anexe o card baixado nessa conversa.");
+      window.open(alvo.url, "_blank");
+      return;
+    }
     if(navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
       await navigator.share({ files: [file], text: alvo.texto, title: alvo.j.descricao || alvo.j.referencia || "Joia" });
-      if(alvo.tel) setTimeout(() => window.open(alvo.url, "_blank"), 250);
     } else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = file.name;
       document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      alert("A imagem da joia foi gerada. Vou abrir a conversa do cliente selecionado com o texto pronto. Anexe a imagem baixada, se o WhatsApp não anexar automaticamente.");
+      setTimeout(() => URL.revokeObjectURL(a.href), 1200);
       window.open(alvo.url, "_blank");
     }
   } finally { setLoading(false); }
 }
 
 
+
 function abrirFotoGrande(id) { const j = getJoia(id); if(j && j.foto) { qs("fotoGrande").src = j.foto; abrirModal("modalFoto"); } }
 
 function duplicarJoia(id) {
   const j = getJoia(id); if(!j) return;
-  const copia = { ...j, id: gerarIdLocal("joia"), referencia: `${j.referencia}-CÓPIA`, status: "disponível", clienteId: "", dataVenda: "", dataCadastro: getHojeSTR() };
+  const copia = { ...j, id: gerarIdLocal("joia"), referencia: `${j.referencia}-CÓPIA`, status: "disponível", clienteId: "", dataVenda: "", dataCadastro: getHojeSTR(), dataEntrada: getHojeSTR(), quantidadeEstoque: Math.max(1, Number(j.quantidadeEstoque || 1)), quantidadeInicial: Math.max(1, Number(j.quantidadeEstoque || 1)) };
   tocarRegistro(copia);
   db.joias.push(copia);
   registrarAuditoria("Joia duplicada", `Ref. ${j.referencia} copiada para ${copia.referencia}`);
@@ -767,12 +837,33 @@ function abrirClientes() { preencherUFSelect("clienteUF", "PB"); renderClientes(
 function renderClientes() {
   const q = (qs("buscaCliente")?.value || "").toLowerCase();
   let lista = [...(db.clientes || [])].sort((a,b) => String(a.nomeCompleto).localeCompare(String(b.nomeCompleto)));
-  if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cidade, c.uf, c.enderecoEntrega].join(" ").toLowerCase().includes(q));
+  if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.enderecoEntrega, c.observacao].join(" ").toLowerCase().includes(q));
   qs("listaClientes").innerHTML = lista.length ? lista.map(c => `
-    <div class="client-card">
-      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(c.enderecoEntrega || "sem endereço")}</small></div>
-      <div class="client-actions"><button onclick="abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
+    <div class="client-card" role="button" tabindex="0" onclick="abrirDetalheCliente('${escapeHTML(c.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); abrirDetalheCliente('${escapeHTML(c.id)}'); }">
+      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(enderecoClienteParaExibicao(c))}</small></div>
+      <div class="client-actions"><button onclick="event.stopPropagation(); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="event.stopPropagation(); excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
     </div>`).join("") : `<div class="empty-state" style="height:180px"><div>👥</div><strong>Nenhum cliente</strong></div>`;
+}
+
+async function buscarCepCliente() {
+  const cep = String(qs("clienteCEP")?.value || "").replace(/\D/g, "");
+  if(cep.length !== 8) return alert("Informe um CEP válido com 8 números.");
+  if(cepLookupInProgress) return;
+  cepLookupInProgress = true;
+  setLoading(true, "Buscando endereço...");
+  try {
+    const res = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { cache: "no-store" });
+    if(!res.ok) throw new Error("Falha ao consultar CEP");
+    const dados = await res.json();
+    if(dados.erro) return alert("CEP não encontrado.");
+    qs("clienteRua").value = dados.logradouro || "";
+    qs("clienteBairro").value = dados.bairro || "";
+    qs("clienteCidade").value = dados.localidade || "";
+    preencherUFSelect("clienteUF", dados.uf || "PB");
+    qs("clienteNumero").focus();
+  } catch(e) {
+    alert("Não foi possível consultar o CEP agora. Você pode preencher o endereço manualmente.");
+  } finally { cepLookupInProgress = false; setLoading(false); }
 }
 
 function abrirFormularioCliente(id = "", contexto = "") {
@@ -784,16 +875,19 @@ function abrirFormularioCliente(id = "", contexto = "") {
     qs("tituloClienteForm").innerText = "Editar cliente";
     qs("clienteNome").value = c.nomeCompleto || "";
     qs("clienteTelefone").value = c.telefone || "";
+    qs("clienteCEP").value = c.cep || "";
+    qs("clienteRua").value = c.rua || c.enderecoEntrega || "";
+    qs("clienteNumero").value = c.numero || "";
+    qs("clienteBairro").value = c.bairro || "";
     qs("clienteCidade").value = c.cidade || "";
     preencherUFSelect("clienteUF", c.uf || "PB");
-    qs("clienteEndereco").value = c.enderecoEntrega || "";
+    qs("clienteComplemento").value = c.complemento || "";
+    qs("clientePontoReferencia").value = c.pontoReferencia || "";
   } else {
     qs("tituloClienteForm").innerText = "Cadastrar cliente";
-    qs("clienteNome").value = "";
-    qs("clienteTelefone").value = "";
+    ["clienteNome","clienteTelefone","clienteCEP","clienteRua","clienteNumero","clienteBairro","clienteComplemento","clientePontoReferencia"].forEach(idCampo => { qs(idCampo).value = ""; });
     qs("clienteCidade").value = db.loja?.cidade || "";
     preencherUFSelect("clienteUF", db.loja?.uf || "PB");
-    qs("clienteEndereco").value = "";
   }
   abrirModal("modalClienteForm");
 }
@@ -805,7 +899,19 @@ function salvarClienteForm() {
   let c = id ? getCliente(id) : null;
   const novo = !c;
   if(!c) { c = { id: gerarIdLocal("cli"), dataCadastro: getHojeSTR() }; db.clientes.push(c); }
-  Object.assign(c, { nomeCompleto: nome, telefone: qs("clienteTelefone").value.trim(), cidade: qs("clienteCidade").value.trim(), uf: qs("clienteUF").value, enderecoEntrega: qs("clienteEndereco").value.trim() });
+  Object.assign(c, {
+    nomeCompleto: nome,
+    telefone: qs("clienteTelefone").value.trim(),
+    cep: qs("clienteCEP").value.trim(),
+    rua: qs("clienteRua").value.trim(),
+    numero: qs("clienteNumero").value.trim(),
+    bairro: qs("clienteBairro").value.trim(),
+    cidade: qs("clienteCidade").value.trim(),
+    uf: qs("clienteUF").value,
+    complemento: qs("clienteComplemento").value.trim(),
+    pontoReferencia: qs("clientePontoReferencia").value.trim()
+  });
+  c.enderecoEntrega = montarEnderecoCliente(c);
   tocarRegistro(c);
   registrarAuditoria(novo ? "Cliente cadastrado" : "Cliente alterado", nome);
   salvarBanco();
@@ -817,6 +923,35 @@ function salvarClienteForm() {
   if(contextoNovoCliente === "venda") qs("vendaCliente").value = c.id;
   if(contextoNovoCliente === "reserva") qs("reservaCliente").value = c.id;
   contextoNovoCliente = "";
+}
+
+function abrirDetalheCliente(id) {
+  const c = getCliente(id); if(!c) return;
+  const compras = (db.vendas || []).filter(v => v.clienteId === id).sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
+  const joiasRelacionadas = (db.joias || []).filter(j => j.clienteId === id);
+  qs("detalheClienteConteudo").innerHTML = `
+    <div class="client-detail-header"><div class="client-avatar">👤</div><div><h2>${escapeHTML(c.nomeCompleto)}</h2><p>${escapeHTML(c.telefone || "Sem telefone")}</p></div></div>
+    <div class="detail-grid client-detail-grid">
+      <div class="detail-box"><small>CEP</small><strong>${escapeHTML(c.cep || "-")}</strong></div>
+      <div class="detail-box"><small>Cidade / UF</small><strong>${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - ") || "-")}</strong></div>
+      <div class="detail-box"><small>Cadastro</small><strong>${escapeHTML(formatDataBR(c.dataCadastro) || "-")}</strong></div>
+    </div>
+    <div class="client-address-box"><small>Endereço</small><p>${escapeHTML(enderecoClienteParaExibicao(c))}</p></div>
+    <div class="form-group client-observation"><label for="clienteDetalheObservacao">Observação</label><textarea id="clienteDetalheObservacao" rows="4" placeholder="Anotações sobre este cliente...">${escapeHTML(c.observacao || "")}</textarea><button class="btn-outline" onclick="salvarObservacaoCliente('${escapeHTML(c.id)}')">Salvar observação</button></div>
+    <div class="section-title">Histórico de compras</div>
+    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(v.valorVenda)} · ${escapeHTML(v.formaPagamento || "forma não informada")}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
+    ${joiasRelacionadas.length ? `<div class="section-title">Joias reservadas ou vinculadas</div>${joiasRelacionadas.map(j => `<div class="sale-card"><strong>${escapeHTML(j.referencia || "Joia")}</strong><small>${escapeHTML(j.status || "")} · ${formatMoeda(j.precoVenda)}</small></div>`).join("")}` : ""}
+    <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteDetalhe')">Fechar</button><button class="btn-action" onclick="fecharModal('modalClienteDetalhe'); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar cliente</button></div>`;
+  abrirModal("modalClienteDetalhe");
+}
+
+function salvarObservacaoCliente(id) {
+  const c = getCliente(id); if(!c) return;
+  c.observacao = qs("clienteDetalheObservacao").value.trim();
+  tocarRegistro(c);
+  registrarAuditoria("Observação de cliente alterada", c.nomeCompleto);
+  salvarBanco();
+  abrirDetalheCliente(id);
 }
 
 function excluirCliente(id) {
@@ -837,20 +972,34 @@ function abrirVenda(joiaId) {
   qs("vendaJoiaResumo").innerHTML = `${escapeHTML(j.referencia)} · ${escapeHTML(j.descricao || getCategoria(j.categoria).nome)}<br><small>${formatMoeda(j.precoVenda)}</small>`;
   preencherSelectClientes("vendaCliente", j.clienteId || "", false);
   qs("vendaData").value = getHojeSTR();
+  qs("vendaQuantidade").value = "1";
+  qs("vendaQuantidade").max = Math.max(1, Number(j.quantidadeEstoque || 1));
   qs("vendaValor").value = formatMoedaSem(j.precoVenda);
   qs("vendaForma").value = "";
   qs("vendaObs").value = "";
   abrirModal("modalVenda");
 }
 
+function atualizarTotalVenda() {
+  const joia = getJoia(qs("vendaJoiaId")?.value);
+  if(!joia) return;
+  const qtd = Math.max(1, Math.floor(Number(qs("vendaQuantidade")?.value || 1)));
+  qs("vendaValor").value = formatMoedaSem(Number(joia.precoVenda || 0) * qtd);
+}
+
 function salvarVenda() {
   const joia = getJoia(qs("vendaJoiaId").value); if(!joia) return;
   const clienteId = qs("vendaCliente").value;
   if(!clienteId) return alert("Selecione o cliente da venda.");
-  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, data: qs("vendaData").value || getHojeSTR(), valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
+  const qtdSolicitada = Math.max(1, Math.floor(Number(qs("vendaQuantidade").value || 1)));
+  const qtdAtual = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
+  if(qtdSolicitada > qtdAtual) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}.`);
+  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
-  joia.status = "vendido";
+  joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
+  registrarMovimentoEstoque(joia, -qtdSolicitada);
+  joia.status = joia.quantidadeEstoque > 0 ? "disponível" : "vendido";
   joia.clienteId = clienteId;
   joia.dataVenda = venda.data;
   joia.valorVendaReal = venda.valorVenda;
@@ -886,6 +1035,7 @@ function salvarReserva() {
 function liberarReserva(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   j.status = "disponível";
+  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) { j.quantidadeEstoque = 1; registrarMovimentoEstoque(j, 1); }
   j.clienteId = "";
   j.reservaObs = "";
   tocarRegistro(j);
@@ -899,6 +1049,7 @@ function voltarJoiaEstoque(joiaId) {
   const j = getJoia(joiaId); if(!j) return;
   if(!confirm("Voltar esta joia para o estoque? O histórico da venda será mantido.")) return;
   j.status = "disponível";
+  if(Math.max(0, Number(j.quantidadeEstoque || 0)) === 0) { j.quantidadeEstoque = 1; registrarMovimentoEstoque(j, 1); }
   j.clienteId = "";
   j.dataVenda = "";
   tocarRegistro(j);
@@ -959,41 +1110,51 @@ function renderPainelResultados() {
   });
   const maxMes = Math.max(1, ...vendasPorMes.map(x => x.valor));
   const porCatEstoque = (db.categorias || []).map(cat => {
-    const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido");
+    const itens = (db.joias || []).filter(j => j.categoria === cat.id && j.status !== "vendido" && Number(j.quantidadeEstoque || 0) > 0);
     const vendidosMes = vendasMesLista.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
     const vendidosTotal = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
-    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0),0);
-    const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0),0);
+    const qtdEstoque = itens.reduce((s,j) => s + Math.max(0, Number(j.quantidadeEstoque || 0)),0);
+    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
+    const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
     const receitaMes = vendidosMes.reduce((s,v)=>s + Number(v.valorVenda||0),0);
-    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0),0);
-    return { cat, qtd: itens.length, vendidosMes: vendidosMes.length, vendidosTotal: vendidosTotal.length, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0),0), compra, venda, receitaMes, custoMes };
+    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0) * Math.max(1, Number(v.quantidade||1)),0);
+    const qtdVendidosMes = vendidosMes.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
+    const qtdVendidosTotal = vendidosTotal.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
+    return { cat, qtd: qtdEstoque, vendidosMes: qtdVendidosMes, vendidosTotal: qtdVendidosTotal, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0), compra, venda, receitaMes, custoMes };
   });
   const maxCatVenda = Math.max(1, ...porCatEstoque.map(x => x.venda));
   const maxCatReceitaMes = Math.max(1, ...porCatEstoque.map(x => x.receitaMes));
-  const giro = r.total ? Math.round((r.vendidas / r.total) * 100) : 0;
+  const giro = r.totalUnidades ? Math.round((r.vendidas / r.totalUnidades) * 100) : 0;
   const margemPct = r.receitaMes ? ((r.margemRealMes / r.receitaMes) * 100) : 0;
   const variacaoLabel = `${r.variacaoMes >= 0 ? "+" : ""}${formatDecimal(r.variacaoMes,1)}%`;
   const clientesMes = Object.values(vendasMesLista.reduce((acc, v) => {
     const id = v.clienteId || "sem_cliente";
     const cli = getCliente(v.clienteId);
     acc[id] = acc[id] || { nome: cli?.nomeCompleto || "Cliente não localizado", qtd: 0, valor: 0 };
-    acc[id].qtd += 1; acc[id].valor += Number(v.valorVenda || 0);
+    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
     return acc;
   }, {})).sort((a,b)=>b.valor-a.valor).slice(0,5);
+  const topItensMes = Object.values(vendasMesLista.reduce((acc, v) => {
+    const joia = getJoia(v.joiaId);
+    const id = v.joiaId || "sem_item";
+    acc[id] = acc[id] || { ref: joia?.referencia || "-", nome: joia?.descricao || getCategoria(joia?.categoria).nome || "Item não localizado", qtd: 0, valor: 0 };
+    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
+    return acc;
+  }, {})).sort((a,b)=> b.qtd - a.qtd || b.valor - a.valor).slice(0,5);
   qs("painelResumo").innerHTML = `
     <div class="report-month-title">Consulta de ${escapeHTML(nomeMesLongo(mesRef))}</div>
     <div class="report-hero report-hero-3">
-      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.vendasMesQtd} peça(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
+      <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.qtdVendidaMes} un. · ${r.vendasMesQtd} venda(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
       <div><small>Margem do mês</small><strong>${formatMoeda(r.margemRealMes)}</strong><em>${formatDecimal(margemPct,1)}% sobre vendas · custo ${formatMoeda(r.custoVendidoMes)}</em></div>
       <div><small>Valor de venda em estoque</small><strong>${formatMoeda(r.vendaEstoque)}</strong><em>${r.estoque} peças · ${formatDecimal(r.pesoEstoque,3)} g de ouro</em></div>
     </div>
     <div class="report-grid wide">
-      <div class="report-card"><small>Peças vendidas</small><strong>${r.vendasMesQtd}</strong><em>${formatDecimal(r.pesoVendidoMes,3)} g vendidos no mês</em></div>
+      <div class="report-card"><small>Unidades vendidas</small><strong>${r.qtdVendidaMes}</strong><em>${formatDecimal(r.pesoVendidoMes,3)} g vendidos no mês</em></div>
       <div class="report-card"><small>Disponíveis</small><strong>${r.disponiveis}</strong><em>prontas para venda</em></div>
       <div class="report-card"><small>Reservadas</small><strong>${r.reservadas}</strong><em>com cliente vinculado</em></div>
       <div class="report-card"><small>Custo em estoque</small><strong>${formatMoeda(r.custoEstoque)}</strong><em>margem pot. ${formatMoeda(r.margemPotencial)}</em></div>
       <div class="report-card"><small>Comparação mês anterior</small><strong>${variacaoLabel}</strong><em>mês anterior ${formatMoeda(r.receitaMesAnterior)}</em></div>
-      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / total cadastrado</em></div>
+      <div class="report-card"><small>Giro cadastrado</small><strong>${giro}%</strong><em>vendidas / unidades cadastradas</em></div>
     </div>
     <div class="charts-grid">
       <div class="chart-card">
@@ -1016,7 +1177,11 @@ function renderPainelResultados() {
       </div>
       <div class="chart-card">
         <div class="section-title">Top clientes do mês</div>
-        ${clientesMes.length ? clientesMes.map(c => `<div class="ranking-row"><span>${escapeHTML(c.nome)}</span><strong>${formatMoeda(c.valor)}</strong><small>${c.qtd} venda(s)</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
+        ${clientesMes.length ? clientesMes.map(c => `<div class="ranking-row"><span>${escapeHTML(c.nome)}</span><strong>${formatMoeda(c.valor)}</strong><small>${c.qtd} unidade(s)</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
+      </div>
+      <div class="chart-card">
+        <div class="section-title">Itens mais vendidos do mês</div>
+        ${topItensMes.length ? topItensMes.map(i => `<div class="ranking-row"><span>${escapeHTML(i.ref)} · ${escapeHTML(i.nome)}</span><strong>${i.qtd} un.</strong><small>${formatMoeda(i.valor)}</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
       </div>
     </div>
     <div class="section-title">Resumo por categoria</div>
@@ -1026,7 +1191,7 @@ function renderPainelResultados() {
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
     ${vendasMesLista.map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
-      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
+      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
     }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
@@ -1205,14 +1370,14 @@ function importarDadosBackup(event) {
 function exportarCSV(tipo) {
   let rows = [];
   if(tipo === "joias") {
-    rows = [["referencia","descricao","categoria","status","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
-    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
+    rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
+    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
-    rows = [["nome_completo","telefone","cidade","uf","endereco_entrega"]];
-    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cidade, c.uf, c.enderecoEntrega]));
+    rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","observacao"]];
+    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.observacao]));
   } else if(tipo === "vendas") {
-    rows = [["data","referencia","cliente","valor_venda","forma_pagamento","observacao"]];
-    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
+    rows = [["data","referencia","cliente","quantidade","valor_venda","forma_pagamento","observacao"]];
+    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
@@ -1250,9 +1415,28 @@ function temMudancaLocalPendente() {
 }
 
 function tombstoneTempo(valor) { return valor && typeof valor === "object" ? Number(valor.deletedAt || valor._clientChangedAt || 0) : Number(valor || 0); }
-function objetoMaisNovo(a,b) { if(!a) return b || {}; if(!b) return a || {}; const ta = Number(a.updatedAt || a._clientChangedAt || a._serverUpdatedAt || 0); const tb = Number(b.updatedAt || b._clientChangedAt || b._serverUpdatedAt || 0); return tb >= ta ? b : a; }
-function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; out[tipo][id] = tombstoneTempo(bb[id]) >= tombstoneTempo(old) ? bb[id] : old; }); }); return out; }
-function mesclarListaPorData(atual = [], nova = [], excluidos = {}) { const map = {}; atual.concat(nova).forEach(item => { if(!item) return; const key = item.id || item.referencia || item.nome; if(!key) return; map[key] = objetoMaisNovo(map[key], item); }); return Object.keys(map).filter(id => !excluidos[id] || tombstoneTempo(excluidos[id]) < Number(map[id].updatedAt || 0)).map(id => map[id]); }
+function objetoMaisNovo(a,b) {
+  if(!a) return b || {};
+  if(!b) return a || {};
+  if(a._clientDirty && !b._clientDirty) return a;
+  if(b._clientDirty && !a._clientDirty) return b;
+  const ta = Number(a._serverUpdatedAt || a.updatedAt || a._clientChangedAt || 0);
+  const tb = Number(b._serverUpdatedAt || b.updatedAt || b._clientChangedAt || 0);
+  return tb >= ta ? b : a;
+}
+function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; if(old?._clientDirty && !bb[id]?._clientDirty) return; if(bb[id]?._clientDirty || tombstoneTempo(bb[id]) >= tombstoneTempo(old)) out[tipo][id] = bb[id]; }); }); return out; }
+function mesclarListaPorData(atual = [], nova = [], excluidos = {}) {
+  const map = {};
+  atual.concat(nova).forEach(item => {
+    if(!item) return;
+    const key = item.id || item.referencia || item.nome;
+    if(!key) return;
+    map[key] = objetoMaisNovo(map[key], item);
+  });
+  return Object.keys(map)
+    .filter(id => !excluidos[id] || tombstoneTempo(excluidos[id]) < Number(map[id].updatedAt || map[id]._serverUpdatedAt || 0))
+    .map(id => map[id]);
+}
 function mesclarBancosPorData(local, nuvem) {
   local = normalizarBanco(local); nuvem = normalizarBanco(nuvem);
   const merged = normalizarBanco({ ...local });
@@ -1276,11 +1460,12 @@ function mesclarBancosPorData(local, nuvem) {
 
 function aplicarBancoAtualizado(novoBanco, opcoes = {}) {
   if(!validarBancoImportado(novoBanco)) return false;
+  atualizarRelogioServidor(novoBanco._serverNow || novoBanco.configs?.serverNow || novoBanco.configs?.ultimaSincronizacao);
   const urlSalva = db.configs?.url || "";
   db = normalizarBanco(novoBanco);
   if(urlSalva) db.configs.url = urlSalva;
   db.configs.somenteLocal = !db.configs.url;
-  db.configs.ultimaSincronizacao = Date.now();
+  db.configs.ultimaSincronizacao = Number(novoBanco._serverNow || novoBanco.configs?.serverNow || novoBanco.configs?.ultimaSincronizacao || agoraServidor());
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   if(opcoes.render !== false) renderTudo();
   return true;
@@ -1298,6 +1483,7 @@ async function salvarURLComValor(inputUrl, origem = "inicial") {
     const res = await fetch(fetchUrl, { redirect: "follow", cache: "no-store" });
     if(!res.ok) throw new Error("Falha ao buscar dados");
     let dadosNuvem = await res.json();
+    atualizarRelogioServidor(dadosNuvem?._serverNow || dadosNuvem?.configs?.serverNow || dadosNuvem?.configs?.ultimaSincronizacao);
     if(!validarBancoImportado(dadosNuvem)) {
       const base = criarBancoBase();
       base.configs.url = inputUrl;
@@ -1330,18 +1516,23 @@ async function sincronizarFundo(forcado = false, apenasEmpurrar = false) {
   isSyncingFundo = true;
   qs("syncIndicador").style.opacity = "1";
   try {
-    const localAntes = JSON.parse(JSON.stringify(db));
+    const versaoLocalAntes = localMutationVersion;
     const res = await fetch(db.configs.url, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "salvar_banco", dados: db, baseRevision: db.configs.syncRevision || 0 }) });
     if(!res.ok) throw new Error("Falha ao salvar na nuvem");
     const retorno = await res.json().catch(() => null);
+    if(!retorno || retorno.ok !== true) throw new Error(retorno?.erro || "Resposta inválida do back-end");
+    atualizarRelogioServidor(retorno?.serverNow || retorno?.dados?._serverNow || retorno?.dados?.configs?.serverNow);
     if(retorno && retorno.ok && retorno.dados && validarBancoImportado(retorno.dados)) {
-      const mesclado = mesclarBancosPorData(localAntes, retorno.dados);
-      mesclado.configs.url = db.configs.url;
-      mesclado.configs.ultimaSincronizacao = Date.now();
-      aplicarBancoAtualizado(mesclado);
+      // Se nada mudou durante o request, a resposta do servidor é autoritativa.
+      // Se houve uma edição enquanto a rede estava ocupada, preservamos somente
+      // essas edições novas para o próximo envio.
+      const posRequest = localMutationVersion === versaoLocalAntes ? retorno.dados : mesclarBancosPorData(db, retorno.dados);
+      posRequest.configs.url = db.configs.url;
+      posRequest.configs.ultimaSincronizacao = Number(retorno.serverNow || retorno.dados._serverNow || retorno.dados.configs?.serverNow || agoraServidor());
+      aplicarBancoAtualizado(posRequest);
     } else if(retorno && retorno.ok) {
       db.configs.syncRevision = retorno.revision || db.configs.syncRevision || 0;
-      db.configs.ultimaSincronizacao = Date.now();
+      db.configs.ultimaSincronizacao = Number(retorno.serverNow || agoraServidor());
       localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
     }
     renderSyncInfoSafe();
@@ -1364,6 +1555,7 @@ async function puxarDadosNuvem(silencioso = true) {
     if(!res.ok) throw new Error("Falha ao puxar dados");
     let nuvem = await res.json();
     if(!validarBancoImportado(nuvem)) return;
+    atualizarRelogioServidor(nuvem._serverNow || nuvem.configs?.serverNow || nuvem.configs?.ultimaSincronizacao);
     nuvem = normalizarBanco(nuvem);
     if(Number(nuvem.configs.syncRevision || 0) <= Number(db.configs.syncRevision || 0)) { if(!silencioso) alert("Você já está com a versão mais recente."); return; }
     nuvem.configs.url = db.configs.url;
