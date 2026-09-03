@@ -476,3 +476,46 @@ body {
   .round-btn.settings-btn { width: 40px; padding: 0; }
   .fab { width: 50px; height: 50px; right: 14px; bottom: 14px; font-size: 27px; }
 }
+
+/* Versão 3: categorias mais leves e arredondadas, com leitura rápida no celular. */
+.home-categories { align-items: stretch; }
+.cat-card {
+  min-height: 92px;
+  border-radius: 26px;
+  padding: 12px 9px 10px;
+  background: radial-gradient(circle at 50% 0%, #fff 0 28%, transparent 62%), linear-gradient(145deg, #fff, var(--theme-sub));
+  transition: transform .18s ease, box-shadow .18s ease, outline-color .18s ease;
+}
+.cat-card:active, .cat-card.active { transform: translateY(-2px); }
+.cat-card.active { border-radius: 30px; }
+.cat-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #fffdf8, #f1dfb7);
+  border: 1px solid rgba(184,134,11,.32);
+  box-shadow: inset 0 0 0 4px rgba(255,255,255,.55), 0 5px 12px rgba(116,76,22,.12);
+  font-size: 27px;
+}
+.cat-name { font-size: 11px; font-weight: 850; line-height: 1.05; }
+.client-toolbar { align-items: center; gap: 8px; flex-wrap: wrap; }
+.client-toolbar > input { flex: 1 1 190px; min-width: 145px; }
+.client-filter-tabs { display: flex; gap: 5px; overflow-x: auto; }
+.client-filter-tabs .chip { white-space: nowrap; padding: 8px 10px; }
+.client-vip { border-color: rgba(184,134,11,.65); background: linear-gradient(145deg, #fffdf4, #fff3c7); }
+.vip-badge { color: #9a6a12; font-weight: 900; letter-spacing: .02em; }
+.vip-badge.muted { color: #8c8273; }
+.vip-badge.active { background: #fff3bf; border-radius: 999px; padding: 5px 9px; }
+.client-purchase-summary { color: var(--theme-dark); font-weight: 700; }
+.client-vip-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 4px; }
+#perfilAtualTipo { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.seller-report-hero > div { background: linear-gradient(145deg, #fff, #fff7e1); }
+
+@media (max-width: 760px) {
+  .cat-card { min-height: 84px; border-radius: 22px; }
+  .cat-icon { width: 46px; height: 46px; font-size: 24px; }
+  .client-toolbar > .btn-action { flex: 1 1 100%; }
+}

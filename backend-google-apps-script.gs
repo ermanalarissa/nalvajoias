@@ -41,11 +41,12 @@ function doPost(e) {
     const baseRevision = Number(payload.baseRevision || recebido.configs.syncRevision || 0);
     const atualRevision = Number(atual.configs.syncRevision || 0);
 
-    // Cada request é processado dentro do lock. Se o aparelho estiver atrasado,
-    // preservamos o snapshot atual e aplicamos somente os registros marcados
-    // como alterados naquele aparelho. Assim, duas vendas/entradas simultâneas
-    // não apagam os dados independentes umas das outras.
-    let finalDb = baseRevision < atualRevision ? mesclarBancosNoServidor(atual, recebido) : recebido;
+    // Todo request passa pelo merge dentro do lock, mesmo quando o aparelho
+    // acredita estar na última revisão. Um snapshot local pode ter ficado
+    // atrasado sem perceber; substituir o banco inteiro nesse caso apagaria
+    // vendas/novos clientes feitos por outro aparelho. O merge preserva os
+    // registros atuais e aplica somente alterações marcadas pelo cliente.
+    let finalDb = (atualRevision === 0 && baseRevision === 0) ? recebido : mesclarBancosNoServidor(atual, recebido);
     finalDb = normalizarBanco(finalDb);
 
     const novaRevision = atualRevision + 1;
@@ -131,6 +132,21 @@ function normalizarBanco(dados) {
 
   getCategoriasPadrao().forEach(function(cat) {
     if (!dados.categorias.some(function(c) { return c && c.id === cat.id; })) dados.categorias.push(cat);
+  });
+
+  dados.clientes.forEach(function(c, idx) {
+    if (!c.id) c.id = 'cli_' + idx;
+    c.vip = !!c.vip;
+  });
+  dados.vendas.forEach(function(v, idx) {
+    if (!v.id) v.id = 'venda_' + idx;
+    v.vendedorId = v.vendedorId || '';
+    v.vendedorNome = v.vendedorNome || '';
+  });
+  dados.administradores.forEach(function(a, idx) {
+    if (!a.id) a.id = 'adm_' + idx;
+    a.tipo = a.tipo || (a.isAdmin === false ? 'vendedora' : 'admin');
+    a.isAdmin = a.tipo !== 'vendedora';
   });
 
   return dados;

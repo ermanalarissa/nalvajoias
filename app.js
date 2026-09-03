@@ -1,7 +1,10 @@
-const APP_VERSION = "v0.1";
+const APP_VERSION = "v0.3";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
-const SYNC_PULL_INTERVAL_MS = 30000;
+// A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
+// impede requests concorrentes e o servidor continua sendo a fonte do horário.
+const SYNC_PULL_INTERVAL_MS = 5000;
+const SYNC_RETRY_INTERVAL_MS = 2500;
 const AUDITORIA_RETENCAO_DIAS = 30;
 
 const CATEGORIAS_PADRAO = [
@@ -36,8 +39,12 @@ let logoLojaTemp = "";
 let contextoNovoCliente = "";
 let isSyncingFundo = false;
 let syncTimer = null;
+let syncIntervalId = null;
+let syncListenersRegistered = false;
 let syncPendente = false;
 let cepLookupInProgress = false;
+let renderPendenteSync = false;
+let filtroClientes = "todos";
 
 function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
@@ -64,12 +71,54 @@ function maskDecimal(el, casas = 3) { let v = el.value.replace(/[^\d,\.]/g, "").
 function maskTelefone(el) { let v = el.value.replace(/\D/g, ""); if(v.length > 11) v = v.slice(0, 11); v = v.replace(/^(\d{2})(\d)/, "($1) $2"); v = v.replace(/(\d{5})(\d{4})$/, "$1-$2"); el.value = v; }
 function maskCEP(el) { let v = el.value.replace(/\D/g, "").slice(0, 8); if(v.length > 5) v = `${v.slice(0,5)}-${v.slice(5)}`; el.value = v; }
 function abrirModal(id) { const el = qs(id); if(el) { el.style.display = "flex"; const modal = el.querySelector(".modal"); if(modal) modal.scrollTop = 0; } }
-function fecharModal(id) { const el = qs(id); if(el) el.style.display = "none"; }
+function fecharModal(id) {
+  const el = qs(id);
+  if(el) el.style.display = "none";
+  // Uma sincronização em segundo plano nunca deve apagar o que está sendo
+  // digitado. Assim que o último modal fecha, a tela recebe a atualização.
+  if(renderPendenteSync && !qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none")) {
+    renderPendenteSync = false;
+    renderTudo(false);
+  }
+}
 function setLoading(ativo, texto = "Processando...") { qs("loadingText").innerText = texto; qs("loadingOverlay").style.display = ativo ? "flex" : "none"; }
 function getCategoria(id) { return (db.categorias || []).find(c => c.id === id) || { id, nome: id || "Sem categoria", icon: "◆" }; }
 function getCliente(id) { return (db.clientes || []).find(c => c.id === id) || null; }
 function getJoia(id) { return (db.joias || []).find(j => j.id === id) || null; }
 function getUsuarioAuditoria() { return adminLogado && adminLogado.nome ? adminLogado.nome : "Sistema"; }
+function ehVendedora(perfil = adminLogado) { return !!perfil && (perfil.tipo === "vendedora" || perfil.isAdmin === false); }
+function ehAdministrador(perfil = adminLogado) { return !!perfil && !ehVendedora(perfil); }
+function exigirAdministrador() {
+  if(ehAdministrador()) return true;
+  alert("Esta área está disponível apenas para o perfil Administrador.");
+  return false;
+}
+function modalDeEdicaoAberto() {
+  return qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none" && ["modalJoiaForm","modalClienteForm","modalVenda","modalReserva","modalUsuarioForm","modalConfiguracoes","modalTemaVisual","modalTrocaSenha"].includes(m.id));
+}
+function atualizarPermissoesPerfil() {
+  const vendedor = ehVendedora();
+  const administrador = ehAdministrador();
+  const alternar = (id, visivel) => { const el = qs(id); if(el) el.style.display = visivel ? "" : "none"; };
+  ["btnPainelGeral","btnDadosLoja","btnTemaVisual","btnAuditoria","btnAvancado"].forEach(id => alternar(id, administrador));
+  alternar("btnPainelVendedora", vendedor);
+  alternar("btnMenuPainelVendedora", vendedor);
+  const campoCompra = qs("campoJoiaCompra");
+  if(campoCompra) campoCompra.style.display = vendedor ? "none" : "";
+  const custos = qsa(".somente-admin"); custos.forEach(el => el.style.display = vendedor ? "none" : "");
+}
+function getVendedorAtual() {
+  if(!adminLogado || !ehVendedora()) return null;
+  return { id: adminLogado.id || "", nome: adminLogado.nome || "" };
+}
+function preencherSelectVendedores(valor = "") {
+  const select = qs("vendaVendedora");
+  if(!select) return;
+  const vendedores = getPerfisAdminDisponiveis().filter(p => ehVendedora(p));
+  select.innerHTML = '<option value="">Venda da loja/administrador</option>' + vendedores.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.nome)}</option>`).join("");
+  select.value = valor || "";
+  select.closest(".form-group")?.style.setProperty("display", ehAdministrador() ? "" : "none");
+}
 function montarEnderecoCliente(c = {}) {
   const rua = [c.rua, c.numero].filter(Boolean).join(", ");
   const local = [rua, c.bairro, c.cidade, c.uf].filter(Boolean).join(" - ");
@@ -159,6 +208,7 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     c.complemento = c.complemento || "";
     c.pontoReferencia = c.pontoReferencia || "";
     c.observacao = c.observacao || c.obs || "";
+    c.vip = !!c.vip;
     c.enderecoEntrega = c.enderecoEntrega || montarEnderecoCliente(c);
     c.updatedAt = Number(c.updatedAt || 0);
   });
@@ -168,6 +218,8 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.data = v.data || getHojeSTR();
     v.valorVenda = Number(v.valorVenda || 0);
     v.quantidade = Math.max(1, Math.floor(Number(v.quantidade || 1)));
+    v.vendedorId = v.vendedorId || "";
+    v.vendedorNome = v.vendedorNome || "";
     v.updatedAt = Number(v.updatedAt || 0);
   });
 
@@ -175,7 +227,8 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!a.id) a.id = `adm_${normalizarTextoId(a.nome)}_${idx}`;
     a.nome = a.nome || "Usuário";
     a.senha = String(a.senha || "");
-    a.isAdmin = a.isAdmin !== false;
+    a.tipo = a.tipo || (a.isAdmin === false ? "vendedora" : "admin");
+    a.isAdmin = a.tipo !== "vendedora";
     a.forcarTrocaSenha = !!a.forcarTrocaSenha;
     a.updatedAt = Number(a.updatedAt || 0);
   });
@@ -236,8 +289,11 @@ function registrarAuditoria(acao, detalhes = "") {
 }
 
 function getPerfisAdminDisponiveis() {
-  const perfis = (db.administradores || []).filter(a => a.nome && a.senha).map(a => ({ id: a.id, nome: a.nome, senha: String(a.senha), isAdmin: a.isAdmin !== false, forcarTrocaSenha: !!a.forcarTrocaSenha }));
-  if(perfis.length === 0) perfis.push({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), isAdmin: true, forcarTrocaSenha: false });
+  const perfis = (db.administradores || []).filter(a => a.nome && a.senha).map(a => {
+    const tipo = a.tipo || (a.isAdmin === false ? "vendedora" : "admin");
+    return { id: a.id, nome: a.nome, senha: String(a.senha), tipo, isAdmin: tipo !== "vendedora", forcarTrocaSenha: !!a.forcarTrocaSenha };
+  });
+  if(perfis.length === 0) perfis.push({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), tipo: "admin", isAdmin: true, forcarTrocaSenha: false });
   return perfis;
 }
 
@@ -288,7 +344,7 @@ function entrarAdmin() {
   const perfil = getPerfisAdminDisponiveis().find(a => a.id === usuarioId);
   if(!perfil) { exibirErroLogin("loginAdminErro", "Selecione um usuário válido."); return; }
   if(!senha || senha !== perfil.senha) { exibirErroLogin("loginAdminErro", "Senha incorreta."); qs("loginAdminSenha").select(); return; }
-  adminLogado = { id: perfil.id, nome: perfil.nome, isAdmin: perfil.isAdmin !== false, forcarTrocaSenha: !!perfil.forcarTrocaSenha };
+  adminLogado = { id: perfil.id, nome: perfil.nome, tipo: perfil.tipo || (perfil.isAdmin === false ? "vendedora" : "admin"), isAdmin: perfil.isAdmin !== false, forcarTrocaSenha: !!perfil.forcarTrocaSenha };
   fecharModal("modalLoginAdmin");
   atualizarPerfilAdminUI();
   registrarAuditoria("Login", `Perfil ${perfil.nome} acessou o aplicativo.`);
@@ -301,6 +357,10 @@ function atualizarPerfilAdminUI() {
   const nome = adminLogado ? adminLogado.nome : "Entrar";
   qs("perfilAdminNome").innerText = nome.length > 12 ? nome.slice(0,11) + "…" : nome;
   qs("perfilAtualNome").innerText = nome;
+  const tipo = qs("perfilAtualTipo");
+  if(tipo) tipo.innerText = adminLogado ? (ehVendedora() ? "Vendedora" : "Administrador") : "Não conectado";
+  atualizarPermissoesPerfil();
+  if(ehVendedora()) ["modalPainelResultados","modalAvancado","modalConfiguracoes","modalTemaVisual","modalAuditoria"].forEach(id => { const el = qs(id); if(el) el.style.display = "none"; });
 }
 
 function abrirMenuPerfil() { if(!adminLogado) abrirLoginAdmin(false); else abrirModal("modalPerfilAdmin"); }
@@ -336,7 +396,7 @@ function salvarTrocaSenhaPerfil() {
 
   let registro = db.administradores.find(a => a.id === adminLogado.id);
   if(!registro && adminLogado.id === "admin_padrao") {
-    registro = { id: gerarIdLocal("adm"), nome: "Administrador", senha: nova, isAdmin: true, forcarTrocaSenha: false };
+    registro = { id: gerarIdLocal("adm"), nome: "Administrador", senha: nova, tipo: "admin", isAdmin: true, forcarTrocaSenha: false };
     db.administradores.push(registro);
     adminLogado.id = registro.id;
   }
@@ -488,6 +548,7 @@ function renderLista() {
 function renderTudo(scrollTop = false) {
   aplicarTema();
   renderCabecalho();
+  atualizarPerfilAdminUI();
   renderCategorias();
   renderChips();
   renderLista();
@@ -605,12 +666,15 @@ function salvarJoiaForm() {
   const nova = !joia;
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
   const quantidadeAnterior = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
+  const precoCompraAnterior = Number(joia.precoCompra || 0);
   Object.assign(joia, {
     referencia,
     categoria,
     descricao: qs("joiaDescricao").value.trim(),
     pesoOuro: parseDecimal(qs("joiaPeso").value),
-    precoCompra: parseMoeda(qs("joiaCompra").value),
+    // O campo de custo fica oculto para a vendedora e nunca pode ser zerado
+    // por uma edição feita nesse perfil.
+    precoCompra: ehVendedora() ? precoCompraAnterior : parseMoeda(qs("joiaCompra").value),
     precoVenda: parseMoeda(qs("joiaVenda").value),
     quantidadeEstoque,
     quantidadeInicial: Math.max(Number(joia.quantidadeInicial || 0), quantidadeEstoque),
@@ -635,6 +699,9 @@ function abrirDetalheJoia(id) {
   const cli = getCliente(j.clienteId);
   const lucro = Number(j.precoVenda || 0) - Number(j.precoCompra || 0);
   const vendas = (db.vendas || []).filter(v => v.joiaId === j.id).sort((a,b) => String(b.data).localeCompare(String(a.data)));
+  const blocoFinanceiroJoia = ehAdministrador() ? `
+       <div class="detail-box"><small>Compra</small><strong>${formatMoeda(j.precoCompra)}</strong></div>
+       <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>` : "";
   qs("detalheJoiaConteudo").innerHTML = `
     <div class="detail-header">
       <div class="detail-photo" onclick="abrirFotoGrande('${escapeHTML(j.id)}')">${j.foto ? `<img src="${j.foto}" alt="${escapeHTML(j.referencia)}">` : `<span>${escapeHTML(cat.icon || "◆")}</span>`}</div>
@@ -649,9 +716,8 @@ function abrirDetalheJoia(id) {
     <div class="detail-grid">
       <div class="detail-box"><small>Estoque</small><strong>${Math.max(0, Number(j.quantidadeEstoque || 0))}</strong></div>
       <div class="detail-box"><small>Peso ouro</small><strong>${formatDecimal(j.pesoOuro,3)} g</strong></div>
-      <div class="detail-box"><small>Compra</small><strong>${formatMoeda(j.precoCompra)}</strong></div>
-      <div class="detail-box"><small>Venda</small><strong>${formatMoeda(j.precoVenda)}</strong></div>
-      <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>
+       <div class="detail-box"><small>Venda</small><strong>${formatMoeda(j.precoVenda)}</strong></div>
+       ${blocoFinanceiroJoia}
       <div class="detail-box"><small>Entrada</small><strong>${formatDataBR(j.dataEntrada || j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Cadastro</small><strong>${formatDataBR(j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Atualizado</small><strong>${formatDateTime(j.updatedAt)}</strong></div>
@@ -833,16 +899,42 @@ function excluirJoia(id) {
   renderTudo();
 }
 
+function getResumoCliente(clienteId) {
+  const vendas = (db.vendas || []).filter(v => v.clienteId === clienteId);
+  return {
+    vendas: vendas.length,
+    unidades: vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0),
+    total: vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0),
+    ultima: vendas.map(v => String(v.data || "")).sort().pop() || ""
+  };
+}
+function setFiltroClientes(filtro) {
+  filtroClientes = filtro || "todos";
+  qsa("[data-filtro-cliente]").forEach(btn => btn.classList.toggle("active", btn.dataset.filtroCliente === filtroClientes));
+  renderClientes();
+}
 function abrirClientes() { preencherUFSelect("clienteUF", "PB"); renderClientes(); abrirModal("modalClientes"); }
 function renderClientes() {
   const q = (qs("buscaCliente")?.value || "").toLowerCase();
-  let lista = [...(db.clientes || [])].sort((a,b) => String(a.nomeCompleto).localeCompare(String(b.nomeCompleto)));
+  let lista = [...(db.clientes || [])];
+  if(filtroClientes === "vip") lista = lista.filter(c => c.vip);
+  const ranking = new Map(lista.map(c => [c.id, getResumoCliente(c.id)]));
+  lista.sort((a,b) => filtroClientes === "mais_compram" ? (ranking.get(b.id).total - ranking.get(a.id).total || ranking.get(b.id).unidades - ranking.get(a.id).unidades || String(a.nomeCompleto).localeCompare(String(b.nomeCompleto))) : String(a.nomeCompleto).localeCompare(String(b.nomeCompleto)));
   if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.enderecoEntrega, c.observacao].join(" ").toLowerCase().includes(q));
   qs("listaClientes").innerHTML = lista.length ? lista.map(c => `
-    <div class="client-card" role="button" tabindex="0" onclick="abrirDetalheCliente('${escapeHTML(c.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); abrirDetalheCliente('${escapeHTML(c.id)}'); }">
+    <div class="client-card ${c.vip ? "client-vip" : ""}" data-vip="${c.vip ? "true" : "false"}" role="button" tabindex="0" onclick="abrirDetalheCliente('${escapeHTML(c.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); abrirDetalheCliente('${escapeHTML(c.id)}'); }">
       <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(enderecoClienteParaExibicao(c))}</small></div>
       <div class="client-actions"><button onclick="event.stopPropagation(); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="event.stopPropagation(); excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
     </div>`).join("") : `<div class="empty-state" style="height:180px"><div>👥</div><strong>Nenhum cliente</strong></div>`;
+  if(lista.length) lista.forEach((c, index) => {
+    const resumo = ranking.get(c.id) || getResumoCliente(c.id);
+    const card = qs("listaClientes").children[index];
+    if(card) {
+      const info = card.firstElementChild;
+      if(info) info.insertAdjacentHTML("beforeend", `<small class="client-purchase-summary">${resumo.vendas} venda(s) · ${resumo.unidades} un. · ${formatMoeda(resumo.total)}</small>`);
+      if(c.vip && info?.firstElementChild) info.firstElementChild.insertAdjacentHTML("afterbegin", '<span class="vip-badge">★ VIP</span> ');
+    }
+  });
 }
 
 async function buscarCepCliente() {
@@ -929,17 +1021,21 @@ function abrirDetalheCliente(id) {
   const c = getCliente(id); if(!c) return;
   const compras = (db.vendas || []).filter(v => v.clienteId === id).sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
   const joiasRelacionadas = (db.joias || []).filter(j => j.clienteId === id);
+  const resumoCompras = getResumoCliente(id);
   qs("detalheClienteConteudo").innerHTML = `
     <div class="client-detail-header"><div class="client-avatar">👤</div><div><h2>${escapeHTML(c.nomeCompleto)}</h2><p>${escapeHTML(c.telefone || "Sem telefone")}</p></div></div>
+    <div class="client-vip-actions"><span class="vip-badge ${c.vip ? "active" : "muted"}">${c.vip ? "★ Cliente VIP" : "☆ Marcar como VIP"}</span><button class="btn-outline small" onclick="alternarVipCliente('${escapeHTML(c.id)}')">${c.vip ? "Remover VIP" : "Marcar VIP"}</button></div>
     <div class="detail-grid client-detail-grid">
       <div class="detail-box"><small>CEP</small><strong>${escapeHTML(c.cep || "-")}</strong></div>
       <div class="detail-box"><small>Cidade / UF</small><strong>${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - ") || "-")}</strong></div>
       <div class="detail-box"><small>Cadastro</small><strong>${escapeHTML(formatDataBR(c.dataCadastro) || "-")}</strong></div>
+      <div class="detail-box"><small>Compras</small><strong>${resumoCompras.vendas} · ${resumoCompras.unidades} un.</strong></div>
+      <div class="detail-box"><small>Total comprado</small><strong>${formatMoeda(resumoCompras.total)}</strong></div>
     </div>
     <div class="client-address-box"><small>Endereço</small><p>${escapeHTML(enderecoClienteParaExibicao(c))}</p></div>
     <div class="form-group client-observation"><label for="clienteDetalheObservacao">Observação</label><textarea id="clienteDetalheObservacao" rows="4" placeholder="Anotações sobre este cliente...">${escapeHTML(c.observacao || "")}</textarea><button class="btn-outline" onclick="salvarObservacaoCliente('${escapeHTML(c.id)}')">Salvar observação</button></div>
     <div class="section-title">Histórico de compras</div>
-    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(v.valorVenda)} · ${escapeHTML(v.formaPagamento || "forma não informada")}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
+    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(v.valorVenda)} · ${escapeHTML(v.formaPagamento || "forma não informada")}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
     ${joiasRelacionadas.length ? `<div class="section-title">Joias reservadas ou vinculadas</div>${joiasRelacionadas.map(j => `<div class="sale-card"><strong>${escapeHTML(j.referencia || "Joia")}</strong><small>${escapeHTML(j.status || "")} · ${formatMoeda(j.precoVenda)}</small></div>`).join("")}` : ""}
     <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteDetalhe')">Fechar</button><button class="btn-action" onclick="fecharModal('modalClienteDetalhe'); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar cliente</button></div>`;
   abrirModal("modalClienteDetalhe");
@@ -951,6 +1047,16 @@ function salvarObservacaoCliente(id) {
   tocarRegistro(c);
   registrarAuditoria("Observação de cliente alterada", c.nomeCompleto);
   salvarBanco();
+  abrirDetalheCliente(id);
+}
+
+function alternarVipCliente(id) {
+  const c = getCliente(id); if(!c) return;
+  c.vip = !c.vip;
+  tocarRegistro(c);
+  registrarAuditoria(c.vip ? "Cliente marcado como VIP" : "Cliente retirado do VIP", c.nomeCompleto);
+  salvarBanco();
+  renderClientes();
   abrirDetalheCliente(id);
 }
 
@@ -977,6 +1083,7 @@ function abrirVenda(joiaId) {
   qs("vendaValor").value = formatMoedaSem(j.precoVenda);
   qs("vendaForma").value = "";
   qs("vendaObs").value = "";
+  preencherSelectVendedores("");
   abrirModal("modalVenda");
 }
 
@@ -994,7 +1101,9 @@ function salvarVenda() {
   const qtdSolicitada = Math.max(1, Math.floor(Number(qs("vendaQuantidade").value || 1)));
   const qtdAtual = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
   if(qtdSolicitada > qtdAtual) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}.`);
-  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
+  const vendedorSelecionado = ehVendedora() ? getVendedorAtual() : getPerfisAdminDisponiveis().find(p => p.id === qs("vendaVendedora")?.value && ehVendedora(p));
+  const vendedor = vendedorSelecionado || (ehVendedora() ? getVendedorAtual() : null);
+  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
   joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
@@ -1087,11 +1196,14 @@ function getMesPainelSelecionado() {
   return getMesAtualSTR();
 }
 function abrirPainelResultados() {
+  if(!adminLogado) return abrirLoginAdmin(false);
+  if(ehVendedora()) return abrirPainelVendedora();
   const input = qs("painelMes");
   if(input && !input.value) input.value = getMesAtualSTR();
   renderPainelResultados();
   abrirModal("modalPainelResultados");
 }
+function abrirPainelPerfil() { return ehVendedora() ? abrirPainelVendedora() : abrirPainelResultados(); }
 function mudarMesPainel(delta) {
   const input = qs("painelMes");
   if(!input) return;
@@ -1191,8 +1303,45 @@ function renderPainelResultados() {
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
     ${vendasMesLista.map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
-      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
+      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}${v.vendedorNome ? ` · Vendedora: ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
     }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
+  `;
+}
+
+function getVendasDoVendedor(id, mesRef = getMesAtualSTR()) {
+  const perfil = getPerfisAdminDisponiveis().find(p => p.id === id) || adminLogado;
+  const nome = String(perfil?.nome || "").toLowerCase();
+  return (db.vendas || []).filter(v => String(v.data || "").slice(0,7) === mesRef && ((v.vendedorId && v.vendedorId === id) || (!v.vendedorId && nome && String(v.vendedorNome || "").toLowerCase() === nome)));
+}
+function abrirPainelVendedora() {
+  if(!adminLogado) return abrirLoginAdmin(false);
+  if(!ehVendedora()) return abrirPainelResultados();
+  const input = qs("painelMesVendedora");
+  if(input && !input.value) input.value = getMesAtualSTR();
+  renderPainelVendedora();
+  abrirModal("modalPainelVendedora");
+}
+function mudarMesPainelVendedora(delta) {
+  const input = qs("painelMesVendedora"); if(!input) return;
+  input.value = deslocarMes(input.value || getMesAtualSTR(), delta);
+  renderPainelVendedora();
+}
+function renderPainelVendedora() {
+  if(!adminLogado) return;
+  const mesRef = qs("painelMesVendedora")?.value || getMesAtualSTR();
+  const vendas = getVendasDoVendedor(adminLogado.id, mesRef).sort((a,b) => String(b.data).localeCompare(String(a.data)));
+  const unidades = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
+  const receita = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const clientes = new Set(vendas.map(v => v.clienteId).filter(Boolean)).size;
+  qs("painelResumoVendedora").innerHTML = `
+    <div class="report-month-title">Minhas vendas · ${escapeHTML(nomeMesLongo(mesRef))}</div>
+    <div class="report-hero report-hero-3 seller-report-hero">
+      <div><small>Faturamento do mês</small><strong>${formatMoeda(receita)}</strong><em>${vendas.length} venda(s)</em></div>
+      <div><small>Peças vendidas</small><strong>${unidades}</strong><em>${clientes} cliente(s)</em></div>
+      <div><small>Ticket médio</small><strong>${formatMoeda(vendas.length ? receita / vendas.length : 0)}</strong><em>dados do seu perfil</em></div>
+    </div>
+    <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
+    ${vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(v.formaPagamento || "")}${v.obs ? ` · ${escapeHTML(v.obs)}` : ""}</p></div>`; }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
 
@@ -1218,6 +1367,7 @@ function renderTemasPredefinidos() {
 }
 
 function abrirDadosLoja() {
+  if(!exigirAdministrador()) return;
   qs("lojaNome").value = db.loja.nome || "";
   qs("lojaTelefone").value = db.loja.telefone || "";
   qs("lojaCidade").value = db.loja.cidade || "";
@@ -1228,6 +1378,7 @@ function abrirDadosLoja() {
 }
 function abrirConfiguracoes() { abrirDadosLoja(); }
 function abrirTemaVisual() {
+  if(!exigirAdministrador()) return;
   renderTemasPredefinidos();
   abrirModal("modalTemaVisual");
 }
@@ -1235,6 +1386,7 @@ function renderPreviewLogoLoja() { qs("previewLogoLoja").innerHTML = logoLojaTem
 async function selecionarLogoLoja(event) { const file = event.target.files && event.target.files[0]; if(!file) return; setLoading(true, "Comprimindo logo..."); try { logoLojaTemp = await comprimirImagem(file, 512, .86); renderPreviewLogoLoja(); } finally { setLoading(false); } }
 
 function salvarDadosLoja() {
+  if(!exigirAdministrador()) return;
   db.loja.nome = qs("lojaNome").value.trim() || "JoiasPro";
   db.loja.telefone = qs("lojaTelefone").value.trim();
   db.loja.cidade = qs("lojaCidade").value.trim();
@@ -1248,6 +1400,7 @@ function salvarDadosLoja() {
   alert("Dados da loja salvos.");
 }
 function salvarTemaVisual() {
+  if(!exigirAdministrador()) return;
   const tema = getTemaSelecionado();
   db.configGerais.temaId = tema.id;
   db.configGerais.corTema = tema.cor;
@@ -1260,11 +1413,13 @@ function salvarTemaVisual() {
   alert("Tema salvo.");
 }
 function salvarConfigAvancada() {
+  if(!exigirAdministrador()) return;
   db.configs.url = qs("configUrlApp").value.trim();
   db.configs.somenteLocal = !db.configs.url;
   registrarAuditoria("Configuração de sincronização alterada", db.configs.url ? "Back-end configurado." : "Uso local sem back-end.");
   salvarBanco();
   renderSyncInfo();
+  inicializarSincronizacaoAutomatica();
   alert("Configuração avançada salva.");
 }
 function salvarConfiguracoes() { salvarDadosLoja(); }
@@ -1272,28 +1427,32 @@ function salvarConfiguracoes() { salvarDadosLoja(); }
 function renderSyncInfo() {
   const status = db.configs.url ? "Sincronização configurada" : "Somente local";
   const ultima = db.configs.ultimaSincronizacao ? formatDateTime(db.configs.ultimaSincronizacao) : "nunca";
-  qs("syncInfo").innerHTML = `<strong>${status}</strong><br>Última sincronização: ${ultima}<br>Revisão: ${escapeHTML(db.configs.syncRevision || 0)}`;
+  const fila = syncPendente || temMudancaLocalPendente() ? " · alterações aguardando envio" : "";
+  qs("syncInfo").innerHTML = `<strong>${status}${fila}</strong><br>Última sincronização: ${ultima}<br>Revisão: ${escapeHTML(db.configs.syncRevision || 0)}<br><small>Atualização automática ativa enquanto o app estiver aberto.</small>`;
 }
 
 function renderUsuarios() {
   const usuarios = getPerfisAdminDisponiveis();
   qs("listaUsuarios").innerHTML = usuarios.map(u => `
-    <div class="user-card"><div><strong>${escapeHTML(u.nome)}</strong><small>${u.isAdmin ? "Administrador" : "Usuário"}${u.forcarTrocaSenha ? " · troca de senha pendente" : ""}</small></div>
+    <div class="user-card"><div><strong>${escapeHTML(u.nome)}</strong><small>${u.tipo === "vendedora" ? "Vendedora" : "Administrador"}${u.forcarTrocaSenha ? " · troca de senha pendente" : ""}</small></div>
     <div class="client-actions"><button onclick="abrirFormularioUsuario('${escapeHTML(u.id)}')">Editar</button>${u.id !== "admin_padrao" ? `<button onclick="excluirUsuario('${escapeHTML(u.id)}')">Excluir</button>` : ""}</div></div>`).join("");
 }
 
 function abrirFormularioUsuario(id = "") {
+  if(!exigirAdministrador()) return;
   qs("usuarioId").value = id || "";
   const u = id ? getPerfisAdminDisponiveis().find(x => x.id === id) : null;
   qs("tituloUsuarioForm").innerText = u ? "Editar usuário" : "Cadastrar usuário";
   qs("usuarioNome").value = u ? u.nome : "";
   qs("usuarioSenha").value = u ? u.senha : "";
   qs("usuarioAdmin").checked = u ? u.isAdmin : true;
+  if(qs("usuarioTipo")) qs("usuarioTipo").value = u ? (u.tipo || (u.isAdmin ? "admin" : "vendedora")) : "vendedora";
   qs("usuarioForcarTroca").checked = u ? u.forcarTrocaSenha : true;
   abrirModal("modalUsuarioForm");
 }
 
 function salvarUsuarioForm() {
+  if(!exigirAdministrador()) return;
   const id = qs("usuarioId").value;
   const nome = qs("usuarioNome").value.trim();
   const senha = qs("usuarioSenha").value.trim();
@@ -1306,7 +1465,8 @@ function salvarUsuarioForm() {
     if(adminLogado && adminLogado.id === "admin_padrao") adminLogado.id = u.id;
   }
   if(!u) { u = { id: gerarIdLocal("adm") }; db.administradores.push(u); }
-  Object.assign(u, { nome, senha, isAdmin: qs("usuarioAdmin").checked, forcarTrocaSenha: qs("usuarioForcarTroca").checked });
+  const tipo = qs("usuarioTipo")?.value || (qs("usuarioAdmin").checked ? "admin" : "vendedora");
+  Object.assign(u, { nome, senha, tipo, isAdmin: tipo === "admin", forcarTrocaSenha: qs("usuarioForcarTroca").checked });
   tocarRegistro(u);
   registrarAuditoria("Usuário salvo", nome);
   salvarBanco();
@@ -1315,6 +1475,7 @@ function salvarUsuarioForm() {
 }
 
 function excluirUsuario(id) {
+  if(!exigirAdministrador()) return;
   const u = db.administradores.find(a => a.id === id); if(!u) return;
   if(adminLogado && adminLogado.id === id) return alert("Não é possível excluir o usuário conectado.");
   if(!confirm(`Excluir usuário ${u.nome}?`)) return;
@@ -1325,7 +1486,7 @@ function excluirUsuario(id) {
   renderUsuarios();
 }
 
-function abrirAuditoria() { renderAuditoria(); abrirModal("modalAuditoria"); }
+function abrirAuditoria() { if(!exigirAdministrador()) return; renderAuditoria(); abrirModal("modalAuditoria"); }
 function renderAuditoria() {
   const q = (qs("buscaAuditoria")?.value || "").toLowerCase();
   let lista = [...(db.auditoria || [])];
@@ -1333,9 +1494,10 @@ function renderAuditoria() {
   qs("listaAuditoria").innerHTML = lista.length ? lista.map(a => `<div class="audit-card"><strong>${escapeHTML(a.acao)}</strong><small>${formatDateTime(a.createdAt)} · ${escapeHTML(a.usuario || "Sistema")}</small><p>${escapeHTML(a.detalhes || "")}</p></div>`).join("") : `<p class="hint">Sem registros de auditoria.</p>`;
 }
 
-function abrirAvancado() { qs("configUrlApp").value = db.configs.url || ""; renderSyncInfo(); renderUsuarios(); abrirModal("modalAvancado"); }
+function abrirAvancado() { if(!exigirAdministrador()) return; qs("configUrlApp").value = db.configs.url || ""; renderSyncInfo(); renderUsuarios(); abrirModal("modalAvancado"); }
 
 function exportarDadosBackup() {
+  if(!exigirAdministrador()) return;
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(db, null, 2));
   const a = document.createElement("a");
   a.href = dataStr;
@@ -1346,6 +1508,7 @@ function exportarDadosBackup() {
 }
 
 function importarDadosBackup(event) {
+  if(!exigirAdministrador()) { if(event?.target) event.target.value = ""; return; }
   const file = event.target.files && event.target.files[0];
   if(!file) return;
   const reader = new FileReader();
@@ -1368,16 +1531,17 @@ function importarDadosBackup(event) {
 }
 
 function exportarCSV(tipo) {
+  if(!exigirAdministrador()) return;
   let rows = [];
   if(tipo === "joias") {
     rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
     (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
-    rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","observacao"]];
-    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.observacao]));
+    rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","vip","observacao"]];
+    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.vip ? "sim" : "nao", c.observacao]));
   } else if(tipo === "vendas") {
-    rows = [["data","referencia","cliente","quantidade","valor_venda","forma_pagamento","observacao"]];
-    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
+    rows = [["data","referencia","cliente","vendedor","quantidade","valor_venda","forma_pagamento","observacao"]];
+    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
@@ -1399,7 +1563,7 @@ function agendarSincronizacao() {
   if(!db.configs || !db.configs.url) return;
   syncPendente = true;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => sincronizarFundo(false, true), 1500);
+  syncTimer = setTimeout(() => sincronizarFundo(false, true), 500);
 }
 
 function temMudancaLocalPendente() {
@@ -1467,7 +1631,10 @@ function aplicarBancoAtualizado(novoBanco, opcoes = {}) {
   db.configs.somenteLocal = !db.configs.url;
   db.configs.ultimaSincronizacao = Number(novoBanco._serverNow || novoBanco.configs?.serverNow || novoBanco.configs?.ultimaSincronizacao || agoraServidor());
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-  if(opcoes.render !== false) renderTudo();
+  if(opcoes.render !== false) {
+    if(modalDeEdicaoAberto()) renderPendenteSync = true;
+    else renderTudo();
+  }
   return true;
 }
 
@@ -1498,6 +1665,7 @@ async function salvarURLComValor(inputUrl, origem = "inicial") {
       salvarBanco({ sincronizar: false, marcarLocal: false });
       await sincronizarFundo(true, false);
     }
+    inicializarSincronizacaoAutomatica();
     if(origem === "inicial") fecharModal("modalSetupUrl");
     alert("Dados sincronizados. Faça login.");
     abrirLoginAdmin(false);
@@ -1510,67 +1678,103 @@ async function salvarURLComValor(inputUrl, origem = "inicial") {
 }
 async function salvarURLInicial() { return salvarURLComValor(qs("setupUrlApp").value, "inicial"); }
 
-async function sincronizarFundo(forcado = false, apenasEmpurrar = false) {
-  if(!db.configs.url || isSyncingFundo) return;
+async function sincronizarFundo(forcado = false, apenasEmpurrar = false, avisar = false) {
+  if(!db.configs.url || isSyncingFundo) return false;
   syncPendente = false;
   isSyncingFundo = true;
-  qs("syncIndicador").style.opacity = "1";
+  if(qs("syncIndicador")) qs("syncIndicador").style.opacity = "1";
   try {
     const versaoLocalAntes = localMutationVersion;
-    const res = await fetch(db.configs.url, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ action: "salvar_banco", dados: db, baseRevision: db.configs.syncRevision || 0 }) });
+    const snapshot = normalizarBanco(JSON.parse(JSON.stringify(db)));
+    const res = await fetch(db.configs.url + (db.configs.url.includes("?") ? "&" : "?") + "nocache=" + Date.now(), { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, cache: "no-store", body: JSON.stringify({ action: "salvar_banco", dados: snapshot, baseRevision: db.configs.syncRevision || 0 }) });
     if(!res.ok) throw new Error("Falha ao salvar na nuvem");
     const retorno = await res.json().catch(() => null);
     if(!retorno || retorno.ok !== true) throw new Error(retorno?.erro || "Resposta inválida do back-end");
     atualizarRelogioServidor(retorno?.serverNow || retorno?.dados?._serverNow || retorno?.dados?.configs?.serverNow);
-    if(retorno && retorno.ok && retorno.dados && validarBancoImportado(retorno.dados)) {
-      // Se nada mudou durante o request, a resposta do servidor é autoritativa.
-      // Se houve uma edição enquanto a rede estava ocupada, preservamos somente
-      // essas edições novas para o próximo envio.
+    if(retorno.dados && validarBancoImportado(retorno.dados)) {
+      // Se houve edição durante o request, ela fica na fila; nunca é apagada
+      // pela resposta do servidor.
       const posRequest = localMutationVersion === versaoLocalAntes ? retorno.dados : mesclarBancosPorData(db, retorno.dados);
       posRequest.configs.url = db.configs.url;
       posRequest.configs.ultimaSincronizacao = Number(retorno.serverNow || retorno.dados._serverNow || retorno.dados.configs?.serverNow || agoraServidor());
-      aplicarBancoAtualizado(posRequest);
-    } else if(retorno && retorno.ok) {
+      aplicarBancoAtualizado(posRequest, { render: true });
+    } else {
       db.configs.syncRevision = retorno.revision || db.configs.syncRevision || 0;
       db.configs.ultimaSincronizacao = Number(retorno.serverNow || agoraServidor());
       localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
     }
     renderSyncInfoSafe();
+    if(avisar) alert("Dados enviados para a nuvem.");
+    return true;
   } catch(e) {
     console.warn("Sync falhou", e);
     syncPendente = true;
+    if(avisar) alert("Não foi possível enviar agora. O app tentará novamente automaticamente.");
+    return false;
   } finally {
     isSyncingFundo = false;
-    qs("syncIndicador").style.opacity = "0";
-    if(syncPendente) { clearTimeout(syncTimer); syncTimer = setTimeout(() => sincronizarFundo(false, true), 6000); }
+    if(qs("syncIndicador")) qs("syncIndicador").style.opacity = "0";
+    if(syncPendente) { clearTimeout(syncTimer); syncTimer = setTimeout(() => sincronizarFundo(false, true), SYNC_RETRY_INTERVAL_MS); }
   }
 }
+function enviarDadosNuvemAgora() { return sincronizarFundo(true, false, true); }
 
 async function puxarDadosNuvem(silencioso = true) {
-  if(!db.configs.url || isSyncingFundo) return;
-  if(syncPendente || temMudancaLocalPendente()) { sincronizarFundo(false, true); return; }
+  if(!db.configs.url || isSyncingFundo) return false;
+  isSyncingFundo = true;
+  if(qs("syncIndicador")) qs("syncIndicador").style.opacity = "1";
   try {
+    const localAntes = normalizarBanco(JSON.parse(JSON.stringify(db)));
+    const versaoLocalAntes = localMutationVersion;
     const fetchUrl = db.configs.url + (db.configs.url.includes("?") ? "&" : "?") + "nocache=" + Date.now();
     const res = await fetch(fetchUrl, { redirect: "follow", cache: "no-store" });
     if(!res.ok) throw new Error("Falha ao puxar dados");
     let nuvem = await res.json();
-    if(!validarBancoImportado(nuvem)) return;
+    if(!validarBancoImportado(nuvem)) throw new Error("Banco incompatível");
     atualizarRelogioServidor(nuvem._serverNow || nuvem.configs?.serverNow || nuvem.configs?.ultimaSincronizacao);
     nuvem = normalizarBanco(nuvem);
-    if(Number(nuvem.configs.syncRevision || 0) <= Number(db.configs.syncRevision || 0)) { if(!silencioso) alert("Você já está com a versão mais recente."); return; }
-    nuvem.configs.url = db.configs.url;
-    aplicarBancoAtualizado(nuvem);
-    if(!silencioso) alert("Dados atualizados da nuvem.");
+    const revisaoNuvem = Number(nuvem.configs.syncRevision || nuvem._serverRevision || 0);
+    const revisaoLocal = Number(localAntes.configs.syncRevision || 0);
+    const houveMudancaLocal = versaoLocalAntes !== localMutationVersion || temMudancaLocalPendente() || syncPendente;
+    if(revisaoNuvem <= revisaoLocal && !houveMudancaLocal) {
+      if(!silencioso) alert("Você já está com a versão mais recente.");
+      return true;
+    }
+    // Mesmo ao clicar em “Puxar”, o snapshot local é mesclado. Isso evita
+    // perder uma venda/cliente criado neste aparelho antes do pull terminar.
+    const mesclado = mesclarBancosPorData(db, nuvem);
+    mesclado.configs.url = db.configs.url;
+    mesclado.configs.somenteLocal = false;
+    aplicarBancoAtualizado(mesclado, { render: true });
+    if(temMudancaLocalPendente()) {
+      syncPendente = true;
+      agendarSincronizacao();
+    }
+    if(!silencioso) alert("Dados atualizados e mesclados com a nuvem.");
     renderSyncInfoSafe();
-  } catch(e) { if(!silencioso) alert("Não foi possível puxar os dados da nuvem."); }
+    return true;
+  } catch(e) {
+    if(!silencioso) alert("Não foi possível puxar os dados da nuvem. O app continuará tentando.");
+    return false;
+  } finally {
+    isSyncingFundo = false;
+    if(qs("syncIndicador")) qs("syncIndicador").style.opacity = "0";
+  }
 }
+function puxarDadosNuvemAgora() { return puxarDadosNuvem(false); }
 function renderSyncInfoSafe() { if(qs("syncInfo")) renderSyncInfo(); }
 
 function inicializarSincronizacaoAutomatica() {
+  if(syncIntervalId) { clearInterval(syncIntervalId); syncIntervalId = null; }
   if(!db.configs.url) return;
-  setTimeout(() => sincronizacaoAutomatica(), 2500);
-  setInterval(() => sincronizacaoAutomatica(), SYNC_PULL_INTERVAL_MS);
-  window.addEventListener("focus", () => sincronizacaoAutomatica());
+  setTimeout(() => sincronizacaoAutomatica(), 700);
+  syncIntervalId = setInterval(() => sincronizacaoAutomatica(), SYNC_PULL_INTERVAL_MS);
+  if(!syncListenersRegistered) {
+    syncListenersRegistered = true;
+    window.addEventListener("focus", () => sincronizacaoAutomatica());
+    window.addEventListener("online", () => sincronizacaoAutomatica());
+    document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible") sincronizacaoAutomatica(); });
+  }
 }
 function sincronizacaoAutomatica() { if(!db.configs.url || isSyncingFundo) return; if(syncPendente || temMudancaLocalPendente()) sincronizarFundo(false, true); else puxarDadosNuvem(true); }
 

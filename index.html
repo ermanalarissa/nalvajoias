@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=0.1">
+  <link rel="stylesheet" href="style.css?v=0.3">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v0.1</div>
+    <div class="splash-version" id="splashVersao">v0.3</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -79,7 +79,8 @@
         </div>
       </div>
       <div class="header-actions">
-        <button class="round-btn" onclick="abrirPainelResultados()" title="Painel">📊</button>
+        <button class="round-btn" id="btnPainelGeral" onclick="abrirPainelPerfil()" title="Painel geral">📊</button>
+        <button class="round-btn" id="btnPainelVendedora" onclick="abrirPainelVendedora()" title="Minhas vendas" style="display:none">🧾</button>
         <button class="profile-btn" onclick="abrirMenuPerfil()" title="Perfil"><span>👤</span><span id="perfilAdminNome">Entrar</span></button>
         <button class="round-btn settings-btn" onclick="abrirModal('modalPainelUnificado')" title="Configurações"><span>⚙️</span><b>Configurações</b></button>
       </div>
@@ -115,10 +116,11 @@
       <div class="modal-title"><span>Configurações</span><button class="icon-btn" onclick="fecharModal('modalPainelUnificado')">✖</button></div>
       <button class="menu-btn" onclick="abrirFormularioJoia(); fecharModal('modalPainelUnificado')">💍 Cadastrar joia</button>
       <button class="menu-btn" onclick="abrirClientes(); fecharModal('modalPainelUnificado')">👥 Clientes</button>
-      <button class="menu-btn" onclick="abrirDadosLoja(); fecharModal('modalPainelUnificado')">🏬 Dados da loja</button>
-      <button class="menu-btn" onclick="abrirTemaVisual(); fecharModal('modalPainelUnificado')">🎨 Tema visual</button>
-      <button class="menu-btn" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
-      <button class="menu-btn danger" onclick="abrirAvancado(); fecharModal('modalPainelUnificado')">⚠️ Avançado</button>
+      <button class="menu-btn somente-admin" id="btnDadosLoja" onclick="abrirDadosLoja(); fecharModal('modalPainelUnificado')">🏬 Dados da loja</button>
+      <button class="menu-btn somente-admin" id="btnTemaVisual" onclick="abrirTemaVisual(); fecharModal('modalPainelUnificado')">🎨 Tema visual</button>
+      <button class="menu-btn somente-admin" id="btnAuditoria" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
+      <button class="menu-btn danger somente-admin" id="btnAvancado" onclick="abrirAvancado(); fecharModal('modalPainelUnificado')">⚠️ Avançado</button>
+      <button class="menu-btn seller-menu" id="btnMenuPainelVendedora" onclick="abrirPainelVendedora(); fecharModal('modalPainelUnificado')" style="display:none">🧾 Minhas vendas do mês</button>
     </div>
   </div>
 
@@ -127,7 +129,7 @@
       <div class="modal-title"><span>Perfil</span><button class="icon-btn" onclick="fecharModal('modalPerfilAdmin')">✖</button></div>
       <div class="profile-current profile-current-clean">
         <span class="profile-current-icon">👤</span>
-        <strong id="perfilAtualNome">Administrador</strong>
+        <div><strong id="perfilAtualNome">Administrador</strong><small id="perfilAtualTipo">Não conectado</small></div>
       </div>
       <div class="modal-actions two">
         <button class="btn-outline" onclick="abrirTrocaSenhaPerfil(false)">Trocar senha</button>
@@ -171,7 +173,7 @@
       <div class="form-group"><label>Descrição / nome da peça</label><input type="text" id="joiaDescricao" placeholder="Ex.: Anel solitário ouro 18k"></div>
       <div class="grid-3">
         <div class="form-group"><label>Peso em ouro (g)</label><input type="text" id="joiaPeso" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,3)"></div>
-        <div class="form-group"><label>Preço de compra</label><input type="text" id="joiaCompra" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
+        <div class="form-group" id="campoJoiaCompra"><label>Preço de compra</label><input type="text" id="joiaCompra" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
         <div class="form-group"><label>Preço de venda</label><input type="text" id="joiaVenda" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
       </div>
       <div class="grid-3">
@@ -195,7 +197,7 @@
   <div class="modal-overlay" id="modalClientes">
     <div class="modal large-modal">
       <div class="modal-title"><span>Clientes</span><button class="icon-btn" onclick="fecharModal('modalClientes')">✖</button></div>
-      <div class="toolbar"><input type="search" id="buscaCliente" placeholder="Buscar cliente..." oninput="renderClientes()"><button class="btn-action compact" onclick="abrirFormularioCliente()">＋ Cliente</button></div>
+      <div class="toolbar client-toolbar"><input type="search" id="buscaCliente" placeholder="Buscar cliente..." oninput="renderClientes()"><div class="client-filter-tabs"><button type="button" class="chip active" data-filtro-cliente="todos" onclick="setFiltroClientes('todos')">Todos</button><button type="button" class="chip" data-filtro-cliente="vip" onclick="setFiltroClientes('vip')">★ VIP</button><button type="button" class="chip" data-filtro-cliente="mais_compram" onclick="setFiltroClientes('mais_compram')">Mais compram</button></div><button class="btn-action compact" onclick="abrirFormularioCliente()">＋ Cliente</button></div>
       <div class="client-list" id="listaClientes"></div>
     </div>
   </div>
@@ -240,6 +242,7 @@
       <div class="sale-item-box" id="vendaJoiaResumo"></div>
       <div class="form-group"><label>Cliente *</label><select id="vendaCliente"></select></div>
       <button class="btn-outline full" onclick="abrirFormularioCliente('', 'venda')">＋ Cadastrar novo cliente</button>
+      <div class="form-group" id="campoVendaVendedora"><label>Vendedora responsável</label><select id="vendaVendedora"></select></div>
       <div class="grid-3 mt12">
         <div class="form-group"><label>Data da venda</label><input type="date" id="vendaData"></div>
         <div class="form-group"><label>Quantidade</label><input type="number" id="vendaQuantidade" min="1" step="1" value="1" oninput="atualizarTotalVenda()"></div>
@@ -277,6 +280,18 @@
         <button class="btn-outline" onclick="exportarCSV('vendas')">Exportar vendas CSV</button>
         <button class="btn-action" onclick="exportarDadosBackup()">Backup completo JSON</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalPainelVendedora">
+    <div class="modal large-modal report-modal">
+      <div class="modal-title"><span>🧾 Minhas vendas</span><button class="icon-btn" onclick="fecharModal('modalPainelVendedora')">✖</button></div>
+      <div class="panel-toolbar">
+        <button class="btn-outline small" onclick="mudarMesPainelVendedora(-1)">‹ mês anterior</button>
+        <div class="form-group panel-month-field"><label>Mês de consulta</label><input type="month" id="painelMesVendedora" onchange="renderPainelVendedora()"></div>
+        <button class="btn-outline small" onclick="mudarMesPainelVendedora(1)">próximo mês ›</button>
+      </div>
+      <div id="painelResumoVendedora"></div>
     </div>
   </div>
 
@@ -321,7 +336,8 @@
       <input type="hidden" id="usuarioId">
       <div class="form-group"><label>Nome *</label><input type="text" id="usuarioNome"></div>
       <div class="form-group"><label>Senha numérica *</label><input type="password" id="usuarioSenha" inputmode="numeric" oninput="this.value=this.value.replace(/[^0-9]/g,'')"></div>
-      <label class="check-row"><input type="checkbox" id="usuarioAdmin"> Administrador completo</label>
+      <div class="form-group"><label>Tipo de acesso</label><select id="usuarioTipo"><option value="vendedora">Vendedora — sem preço de custo e sem faturamento geral</option><option value="admin">Administrador completo</option></select></div>
+      <label class="check-row" style="display:none"><input type="checkbox" id="usuarioAdmin"> Administrador completo</label>
       <label class="check-row"><input type="checkbox" id="usuarioForcarTroca"> Forçar troca de senha no próximo acesso</label>
       <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalUsuarioForm')">Cancelar</button><button class="btn-action" onclick="salvarUsuarioForm()">Salvar</button></div>
     </div>
@@ -341,12 +357,14 @@
       <div class="section-title">Sincronização e back-end</div>
       <div class="form-group"><label>URL do back-end</label><input type="url" id="configUrlApp" placeholder="https://script.google.com/macros/s/.../exec"></div>
       <div class="sync-box" id="syncInfo"></div>
+      <p class="hint sync-hint">O app verifica a nuvem rapidamente enquanto estiver aberto. Alterações locais entram em fila e são mescladas, sem apagar o que acabou de ser feito.</p>
       <div class="modal-actions wrap">
-        <button class="btn-outline" onclick="puxarDadosNuvem(false)">Puxar nuvem</button>
-        <button class="btn-outline" onclick="sincronizarFundo(true, false)">Enviar agora</button>
+        <button class="btn-outline" onclick="puxarDadosNuvemAgora()">Puxar nuvem</button>
+        <button class="btn-outline" onclick="enviarDadosNuvemAgora()">Enviar agora</button>
         <button class="btn-action" onclick="salvarConfigAvancada()">Salvar URL</button>
       </div>
       <div class="section-title">Usuários</div>
+      <p class="hint">Cadastre a vendedora (por exemplo, Caline), escolha “Vendedora” e defina a senha dela. O acesso de vendedora mostra somente as próprias vendas do mês.</p>
       <div id="listaUsuarios"></div>
       <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Cadastrar novo usuário</button>
       <div class="section-title">Backup e manutenção</div>
@@ -384,6 +402,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=0.1" defer></script>
+  <script src="app.js?v=0.3" defer></script>
 </body>
 </html>
