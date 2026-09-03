@@ -519,3 +519,20 @@ body {
   .cat-icon { width: 46px; height: 46px; font-size: 24px; }
   .client-toolbar > .btn-action { flex: 1 1 100%; }
 }
+
+/* Versão 4: pedido, frete e impressão. */
+.btn-outline.small { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
+.btn-outline.compact { padding: 10px 12px; white-space: nowrap; }
+.sale-total-box { border: 1px solid var(--theme-base); border-radius: 13px; padding: 9px 11px; background: var(--theme-sub); align-self: start; }
+.sale-total-box small { display:block; color: var(--muted); font-size: 11px; font-weight: 900; }
+.sale-total-box strong { display:block; color: var(--theme-dark); font-size: 20px; margin-top: 3px; }
+.order-card { display:flex; align-items:center; justify-content:space-between; gap: 12px; border: 1px solid var(--line); border-radius: 16px; padding: 12px; background:#fff; box-shadow: 0 5px 14px rgba(60,37,12,.05); }
+.order-card > div { min-width:0; }
+.order-card strong, .order-card small { display:block; }
+.order-card small { color: var(--muted); font-weight: 800; margin-top: 3px; overflow-wrap:anywhere; }
+.sync-hint { margin-bottom: 2px; }
+@media (max-width: 560px) {
+  .order-card { align-items: flex-start; flex-direction: column; }
+  .order-card .btn-outline { width:100%; }
+  .sale-total-box { margin-bottom: 12px; }
+}

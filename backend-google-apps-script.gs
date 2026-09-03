@@ -142,6 +142,12 @@ function normalizarBanco(dados) {
     if (!v.id) v.id = 'venda_' + idx;
     v.vendedorId = v.vendedorId || '';
     v.vendedorNome = v.vendedorNome || '';
+    v.valorVenda = Number(v.valorVenda || 0);
+    v.valorFrete = Math.max(0, Number(v.valorFrete != null ? v.valorFrete : v.frete) || 0);
+    v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || '';
+    v.pedidoId = v.pedidoId || v.id;
+    var totalInformado = Number(v.valorTotalPedido);
+    v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, 'valorTotalPedido') ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
   });
   dados.administradores.forEach(function(a, idx) {
     if (!a.id) a.id = 'adm_' + idx;

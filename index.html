@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=0.3">
+  <link rel="stylesheet" href="style.css?v=0.4">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v0.3</div>
+    <div class="splash-version" id="splashVersao">v0.4</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -116,6 +116,7 @@
       <div class="modal-title"><span>Configurações</span><button class="icon-btn" onclick="fecharModal('modalPainelUnificado')">✖</button></div>
       <button class="menu-btn" onclick="abrirFormularioJoia(); fecharModal('modalPainelUnificado')">💍 Cadastrar joia</button>
       <button class="menu-btn" onclick="abrirClientes(); fecharModal('modalPainelUnificado')">👥 Clientes</button>
+      <button class="menu-btn" onclick="abrirPedidosClientes(); fecharModal('modalPainelUnificado')">🧾 Pedidos dos clientes</button>
       <button class="menu-btn somente-admin" id="btnDadosLoja" onclick="abrirDadosLoja(); fecharModal('modalPainelUnificado')">🏬 Dados da loja</button>
       <button class="menu-btn somente-admin" id="btnTemaVisual" onclick="abrirTemaVisual(); fecharModal('modalPainelUnificado')">🎨 Tema visual</button>
       <button class="menu-btn somente-admin" id="btnAuditoria" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
@@ -197,7 +198,7 @@
   <div class="modal-overlay" id="modalClientes">
     <div class="modal large-modal">
       <div class="modal-title"><span>Clientes</span><button class="icon-btn" onclick="fecharModal('modalClientes')">✖</button></div>
-      <div class="toolbar client-toolbar"><input type="search" id="buscaCliente" placeholder="Buscar cliente..." oninput="renderClientes()"><div class="client-filter-tabs"><button type="button" class="chip active" data-filtro-cliente="todos" onclick="setFiltroClientes('todos')">Todos</button><button type="button" class="chip" data-filtro-cliente="vip" onclick="setFiltroClientes('vip')">★ VIP</button><button type="button" class="chip" data-filtro-cliente="mais_compram" onclick="setFiltroClientes('mais_compram')">Mais compram</button></div><button class="btn-action compact" onclick="abrirFormularioCliente()">＋ Cliente</button></div>
+      <div class="toolbar client-toolbar"><input type="search" id="buscaCliente" placeholder="Buscar cliente..." oninput="renderClientes()"><div class="client-filter-tabs"><button type="button" class="chip active" data-filtro-cliente="todos" onclick="setFiltroClientes('todos')">Todos</button><button type="button" class="chip" data-filtro-cliente="vip" onclick="setFiltroClientes('vip')">★ VIP</button><button type="button" class="chip" data-filtro-cliente="mais_compram" onclick="setFiltroClientes('mais_compram')">Mais compram</button></div><button class="btn-outline compact" onclick="abrirPedidosClientes()">🧾 Pedidos</button><button class="btn-action compact" onclick="abrirFormularioCliente()">＋ Cliente</button></div>
       <div class="client-list" id="listaClientes"></div>
     </div>
   </div>
@@ -248,9 +249,16 @@
         <div class="form-group"><label>Quantidade</label><input type="number" id="vendaQuantidade" min="1" step="1" value="1" oninput="atualizarTotalVenda()"></div>
         <div class="form-group"><label>Valor vendido</label><input type="text" id="vendaValor" inputmode="decimal" oninput="maskMoeda(this)"></div>
       </div>
-      <div class="form-group"><label>Forma de pagamento</label><input type="text" id="vendaForma" placeholder="Pix, cartão, dinheiro..."></div>
+      <div class="grid-2">
+        <div class="form-group"><label>Forma de pagamento</label><select id="vendaForma"><option value="">Selecione...</option><option value="pix">Pix</option><option value="cartao_presencial">Cartão de crédito presencial</option><option value="cartao_link">Cartão de crédito por link</option><option value="dinheiro">Dinheiro</option></select></div>
+        <div class="form-group"><label>Valor do frete</label><input type="text" id="vendaFrete" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this); atualizarTotalVenda()"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>Modalidade de envio</label><select id="vendaModalidadeEnvio"><option value="pac">PAC</option><option value="sedex">Sedex</option></select></div>
+        <div class="sale-total-box"><small>Valor total do pedido</small><strong id="vendaTotalPedido">R$ 0,00</strong></div>
+      </div>
       <div class="form-group"><label>Observação</label><textarea id="vendaObs" rows="3"></textarea></div>
-      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalVenda')">Cancelar</button><button class="btn-action" onclick="salvarVenda()">Confirmar venda</button></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalVenda')">Cancelar</button><button class="btn-action" onclick="salvarVenda()">Confirmar venda e gerar PDF</button></div>
     </div>
   </div>
 
@@ -292,6 +300,15 @@
         <button class="btn-outline small" onclick="mudarMesPainelVendedora(1)">próximo mês ›</button>
       </div>
       <div id="painelResumoVendedora"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalPedidosClientes" style="z-index:2050">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>🧾 Pedidos dos clientes</span><button class="icon-btn" onclick="fecharModal('modalPedidosClientes')">✖</button></div>
+      <div class="toolbar client-toolbar"><input type="search" id="buscaPedidoCliente" placeholder="Buscar cliente, referência ou vendedor..." oninput="renderPedidosClientes()"><input type="month" id="mesPedidosClientes" onchange="renderPedidosClientes()"></div>
+      <p class="hint">O PDF inclui cliente, endereço completo, peça, total, frete, pagamento e modalidade de envio.</p>
+      <div class="client-list" id="listaPedidosClientes"></div>
     </div>
   </div>
 
@@ -366,7 +383,7 @@
       <div class="section-title">Usuários</div>
       <p class="hint">Cadastre a vendedora (por exemplo, Caline), escolha “Vendedora” e defina a senha dela. O acesso de vendedora mostra somente as próprias vendas do mês.</p>
       <div id="listaUsuarios"></div>
-      <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Cadastrar novo usuário</button>
+      <button class="btn-outline full" onclick="abrirFormularioUsuario()">＋ Cadastrar outra vendedora / usuário</button>
       <div class="section-title">Backup e manutenção</div>
       <button class="btn-action full" onclick="exportarDadosBackup()">Exportar backup JSON</button>
       <label class="file-btn full centered mt12">Importar backup JSON<input type="file" accept="application/json,.json" onchange="importarDadosBackup(event)"></label>
@@ -402,6 +419,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=0.3" defer></script>
+  <script src="app.js?v=0.4" defer></script>
 </body>
 </html>

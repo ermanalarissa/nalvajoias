@@ -3,7 +3,7 @@
 PWA para controle de estoque, vendas, clientes, fotos e sincronização de joias.
 
 ## Versão
-v0.3
+v0.4
 
 ## Senha inicial
 - Usuário: **Administrador**
@@ -33,13 +33,15 @@ v0.3
 3. Publique como Web App.
 4. Copie a URL `/exec` e cole no app em **Configurações > Avançado > URL do back-end**.
 
-Para a v0.3, depois de atualizar este repositório, copie novamente `backend-google-apps-script.gs` para o projeto do Apps Script e crie uma nova implantação/versão. A sincronização usa `LockService`, merge por registro, horário do servidor Google e deltas de estoque para permitir alterações simultâneas em aparelhos diferentes sem substituir dados recentes.
+Para a v0.4, depois de atualizar este repositório, copie novamente `backend-google-apps-script.gs` para o projeto do Apps Script e crie uma nova implantação/versão. A sincronização usa `LockService`, merge por registro, horário do servidor Google e deltas de estoque para permitir alterações simultâneas em aparelhos diferentes sem substituir dados recentes.
 
 ## Observação sobre WhatsApp
 O envio direto de texto usa `wa.me`. Para imagem, o WhatsApp não permite que uma PWA anexe mídia automaticamente em uma conversa específica por número. O app gera o card, copia o texto e abre a conversa do número informado para anexar o card manualmente.
 
-## Versão 0.3
+## Versão 0.4
 - Perfis de Administrador e Vendedora, com painel mensal individual e sem exibição de custo para a vendedora.
+- Cadastro de várias vendedoras, cada uma com nome, senha e acesso individual ao próprio painel mensal.
 - Cada venda registra o vendedor, cliente e baixa de estoque automaticamente.
+- Pedido de envio em PDF gerado ao confirmar a venda e disponível novamente em **Pedidos dos clientes**, com endereço completo, peça, subtotal, frete, total, pagamento e modalidade PAC/Sedex.
 - Merge por registro no Google Apps Script, com `LockService`, relógio do servidor Google e delta de estoque para vendas simultâneas.
 - Clientes VIP marcados e ranking de clientes que mais compram.

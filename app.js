@@ -1,4 +1,4 @@
-const APP_VERSION = "v0.3";
+const APP_VERSION = "v0.4";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 // A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
@@ -86,6 +86,16 @@ function getCategoria(id) { return (db.categorias || []).find(c => c.id === id) 
 function getCliente(id) { return (db.clientes || []).find(c => c.id === id) || null; }
 function getJoia(id) { return (db.joias || []).find(j => j.id === id) || null; }
 function getUsuarioAuditoria() { return adminLogado && adminLogado.nome ? adminLogado.nome : "Sistema"; }
+function getValorFrete(venda = {}) { return Math.max(0, Number(venda.valorFrete ?? venda.frete ?? 0) || 0); }
+function getValorTotalPedido(venda = {}) {
+  const informado = Number(venda.valorTotalPedido);
+  return Number.isFinite(informado) && Object.prototype.hasOwnProperty.call(venda, "valorTotalPedido") ? Math.max(0, informado) : Math.max(0, Number(venda.valorVenda || 0) + getValorFrete(venda));
+}
+function getFormaPagamentoLabel(valor) {
+  const mapa = { pix: "Pix", cartao_presencial: "Cartão de crédito presencial", cartao_link: "Cartão de crédito por link", dinheiro: "Dinheiro" };
+  return mapa[valor] || valor || "Não informado";
+}
+function getModalidadeEnvioLabel(valor) { return String(valor || "").toLowerCase() === "sedex" ? "Sedex" : String(valor || "").toLowerCase() === "pac" ? "PAC" : valor || "Não informado"; }
 function ehVendedora(perfil = adminLogado) { return !!perfil && (perfil.tipo === "vendedora" || perfil.isAdmin === false); }
 function ehAdministrador(perfil = adminLogado) { return !!perfil && !ehVendedora(perfil); }
 function exigirAdministrador() {
@@ -220,6 +230,11 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.quantidade = Math.max(1, Math.floor(Number(v.quantidade || 1)));
     v.vendedorId = v.vendedorId || "";
     v.vendedorNome = v.vendedorNome || "";
+    v.valorFrete = Math.max(0, Number(v.valorFrete ?? v.frete ?? 0) || 0);
+    v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || "";
+    v.pedidoId = v.pedidoId || v.id;
+    const totalInformado = Number(v.valorTotalPedido);
+    v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, "valorTotalPedido") ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
     v.updatedAt = Number(v.updatedAt || 0);
   });
 
@@ -457,10 +472,10 @@ function calcularResumo(mesRef = getMesAtualSTR()) {
   const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0) * getQtd(j), 0);
   const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0) * getQtd(j), 0);
   const vendas = db.vendas || [];
-  const receitaVendida = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const receitaVendida = vendas.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const qtdVendidaTotal = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
   const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
-  const receitaMes = vendasMes.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const receitaMes = vendasMes.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const qtdVendidaMes = vendasMes.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
   const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
   const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
@@ -468,7 +483,7 @@ function calcularResumo(mesRef = getMesAtualSTR()) {
   const margemRealMes = receitaMes - custoVendidoMes;
   const mesAnterior = deslocarMes(mesRef, -1);
   const vendasMesAnterior = vendas.filter(v => String(v.data || "").slice(0,7) === mesAnterior);
-  const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const variacaoMes = receitaMesAnterior ? ((receitaMes - receitaMesAnterior) / receitaMesAnterior) * 100 : (receitaMes ? 100 : 0);
   return { total: joias.length, totalUnidades: estoqueQtd + qtdVendidaTotal, estoque: estoqueQtd, estoqueItens: estoque.length, disponiveis: disponiveisQtd, reservadas: reservadasQtd, vendidas: qtdVendidaTotal, vendidasJoias: vendidasJoias.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, qtdVendidaMes, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
 }
@@ -722,7 +737,7 @@ function abrirDetalheJoia(id) {
       <div class="detail-box"><small>Cadastro</small><strong>${formatDataBR(j.dataCadastro)}</strong></div>
       <div class="detail-box"><small>Atualizado</small><strong>${formatDateTime(j.updatedAt)}</strong></div>
     </div>
-    ${vendas.length ? `<div class="section-title">Histórico de venda deste item</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : `<div class="section-title">Histórico de venda deste item</div><p class="hint">Nenhuma venda registrada para este item.</p>`}
+    ${vendas.length ? `<div class="section-title">Histórico de venda deste item</div>${vendas.map(v => `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(getCliente(v.clienteId)?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}</small><p>${escapeHTML(v.obs || "")}</p></div>`).join("")}` : `<div class="section-title">Histórico de venda deste item</div><p class="hint">Nenhuma venda registrada para este item.</p>`}
     <div class="detail-actions">
       <button class="btn-outline" onclick="fecharModal('modalJoiaDetalhe'); abrirFormularioJoia('${escapeHTML(j.id)}')">Editar</button>
       <button class="btn-outline" onclick="duplicarJoia('${escapeHTML(j.id)}')">Duplicar</button>
@@ -904,7 +919,7 @@ function getResumoCliente(clienteId) {
   return {
     vendas: vendas.length,
     unidades: vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0),
-    total: vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0),
+    total: vendas.reduce((s,v) => s + getValorTotalPedido(v), 0),
     ultima: vendas.map(v => String(v.data || "")).sort().pop() || ""
   };
 }
@@ -914,6 +929,32 @@ function setFiltroClientes(filtro) {
   renderClientes();
 }
 function abrirClientes() { preencherUFSelect("clienteUF", "PB"); renderClientes(); abrirModal("modalClientes"); }
+function vendaPertenceAoPerfil(venda, perfil = adminLogado) {
+  if(!perfil || ehAdministrador(perfil)) return true;
+  const nomePerfil = String(perfil.nome || "").trim().toLowerCase();
+  return (venda.vendedorId && venda.vendedorId === perfil.id) || (!venda.vendedorId && nomePerfil && String(venda.vendedorNome || "").trim().toLowerCase() === nomePerfil);
+}
+function abrirPedidosClientes() {
+  if(!adminLogado) return abrirLoginAdmin(false);
+  const mes = qs("mesPedidosClientes");
+  if(mes && !mes.value) mes.value = getMesAtualSTR();
+  renderPedidosClientes();
+  abrirModal("modalPedidosClientes");
+}
+function renderPedidosClientes() {
+  const busca = String(qs("buscaPedidoCliente")?.value || "").trim().toLowerCase();
+  const mes = qs("mesPedidosClientes")?.value || "";
+  let lista = [...(db.vendas || [])].filter(v => vendaPertenceAoPerfil(v));
+  if(mes) lista = lista.filter(v => String(v.data || "").slice(0,7) === mes);
+  if(busca) lista = lista.filter(v => [v.vendedorNome, getCliente(v.clienteId)?.nomeCompleto, getJoia(v.joiaId)?.referencia, getJoia(v.joiaId)?.descricao].join(" ").toLowerCase().includes(busca));
+  lista.sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  qs("listaPedidosClientes").innerHTML = lista.length ? lista.map(v => {
+    const cliente = getCliente(v.clienteId);
+    const joia = getJoia(v.joiaId);
+    const endereco = cliente ? enderecoClienteParaExibicao(cliente) : "Endereço não localizado";
+    return `<div class="order-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia removida")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(getValorTotalPedido(v))}</small><small>${escapeHTML(endereco)}</small><small>${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))} · ${escapeHTML(getModalidadeEnvioLabel(v.modalidadeEnvio))}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small></div><button class="btn-outline small" onclick="gerarPDFPedido('${escapeHTML(v.id)}')">Baixar PDF</button></div>`;
+  }).join("") : `<div class="empty-state" style="height:180px"><div>🧾</div><strong>Nenhum pedido encontrado</strong><p>Registre uma venda para gerar o pedido.</p></div>`;
+}
 function renderClientes() {
   const q = (qs("buscaCliente")?.value || "").toLowerCase();
   let lista = [...(db.clientes || [])];
@@ -1035,7 +1076,7 @@ function abrirDetalheCliente(id) {
     <div class="client-address-box"><small>Endereço</small><p>${escapeHTML(enderecoClienteParaExibicao(c))}</p></div>
     <div class="form-group client-observation"><label for="clienteDetalheObservacao">Observação</label><textarea id="clienteDetalheObservacao" rows="4" placeholder="Anotações sobre este cliente...">${escapeHTML(c.observacao || "")}</textarea><button class="btn-outline" onclick="salvarObservacaoCliente('${escapeHTML(c.id)}')">Salvar observação</button></div>
     <div class="section-title">Histórico de compras</div>
-    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(v.valorVenda)} · ${escapeHTML(v.formaPagamento || "forma não informada")}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
+    ${compras.length ? compras.map(v => { const j = getJoia(v.joiaId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data) || "-")} · ${escapeHTML(j?.referencia || "Joia removida")}</strong><small>${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(getValorTotalPedido(v))} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || j?.descricao || "")}</p></div>`; }).join("") : `<p class="hint">Nenhuma compra registrada para este cliente.</p>`}
     ${joiasRelacionadas.length ? `<div class="section-title">Joias reservadas ou vinculadas</div>${joiasRelacionadas.map(j => `<div class="sale-card"><strong>${escapeHTML(j.referencia || "Joia")}</strong><small>${escapeHTML(j.status || "")} · ${formatMoeda(j.precoVenda)}</small></div>`).join("")}` : ""}
     <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalClienteDetalhe')">Fechar</button><button class="btn-action" onclick="fecharModal('modalClienteDetalhe'); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar cliente</button></div>`;
   abrirModal("modalClienteDetalhe");
@@ -1082,8 +1123,11 @@ function abrirVenda(joiaId) {
   qs("vendaQuantidade").max = Math.max(1, Number(j.quantidadeEstoque || 1));
   qs("vendaValor").value = formatMoedaSem(j.precoVenda);
   qs("vendaForma").value = "";
+  if(qs("vendaFrete")) qs("vendaFrete").value = "";
+  if(qs("vendaModalidadeEnvio")) qs("vendaModalidadeEnvio").value = "pac";
   qs("vendaObs").value = "";
   preencherSelectVendedores("");
+  atualizarTotalVenda();
   abrirModal("modalVenda");
 }
 
@@ -1091,7 +1135,10 @@ function atualizarTotalVenda() {
   const joia = getJoia(qs("vendaJoiaId")?.value);
   if(!joia) return;
   const qtd = Math.max(1, Math.floor(Number(qs("vendaQuantidade")?.value || 1)));
-  qs("vendaValor").value = formatMoedaSem(Number(joia.precoVenda || 0) * qtd);
+  const subtotal = Number(joia.precoVenda || 0) * qtd;
+  qs("vendaValor").value = formatMoedaSem(subtotal);
+  const frete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
+  if(qs("vendaTotalPedido")) qs("vendaTotalPedido").innerText = formatMoeda(subtotal + frete);
 }
 
 function salvarVenda() {
@@ -1103,7 +1150,10 @@ function salvarVenda() {
   if(qtdSolicitada > qtdAtual) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}.`);
   const vendedorSelecionado = ehVendedora() ? getVendedorAtual() : getPerfisAdminDisponiveis().find(p => p.id === qs("vendaVendedora")?.value && ehVendedora(p));
   const vendedor = vendedorSelecionado || (ehVendedora() ? getVendedorAtual() : null);
-  const venda = { id: gerarIdLocal("venda"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: parseMoeda(qs("vendaValor").value), formaPagamento: qs("vendaForma").value.trim(), obs: qs("vendaObs").value.trim() };
+  const subtotal = Math.max(0, parseMoeda(qs("vendaValor").value));
+  const valorFrete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
+  const modalidadeEnvio = qs("vendaModalidadeEnvio")?.value || "pac";
+  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, modalidadeEnvio, formaPagamento: qs("vendaForma").value, obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
   joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
@@ -1113,11 +1163,143 @@ function salvarVenda() {
   joia.dataVenda = venda.data;
   joia.valorVendaReal = venda.valorVenda;
   tocarRegistro(joia);
-  registrarAuditoria("Venda registrada", `Ref. ${joia.referencia} · ${formatMoeda(venda.valorVenda)}`);
+  registrarAuditoria("Venda registrada", `Ref. ${joia.referencia} · ${formatMoeda(getValorTotalPedido(venda))}`);
   salvarBanco();
   fecharModal("modalVenda");
   fecharModal("modalJoiaDetalhe");
   renderTudo();
+  gerarPDFPedido(venda.id);
+}
+
+function textoPDFSeguro(valor) {
+  const mapa = { "–": "-", "—": "-", "‑": "-", "•": "-", "★": "*", "☆": "*", "…": "...", "“": '"', "”": '"', "’": "'" };
+  return String(valor ?? "").normalize("NFC").replace(/[^\x00-\xFF]/g, ch => mapa[ch] || "?");
+}
+function escaparTextoPDF(valor) { return textoPDFSeguro(valor).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)").replace(/\r?\n/g, " "); }
+function quebrarTextoPedido(valor, limite = 86) {
+  const texto = textoPDFSeguro(valor).replace(/\s+/g, " ").trim();
+  if(!texto) return [""];
+  const palavras = texto.split(" ");
+  const linhas = [];
+  let atual = "";
+  palavras.forEach(palavra => {
+    const tentativa = atual ? `${atual} ${palavra}` : palavra;
+    if(tentativa.length > limite && atual) { linhas.push(atual); atual = palavra; }
+    else atual = tentativa;
+  });
+  if(atual) linhas.push(atual);
+  return linhas;
+}
+function montarLinhasPedidoPDF(venda) {
+  const cliente = getCliente(venda.clienteId) || {};
+  const joia = getJoia(venda.joiaId) || {};
+  const categoria = getCategoria(joia.categoria);
+  const endereco = [
+    cliente.cep ? `CEP: ${cliente.cep}` : "",
+    cliente.rua ? `${cliente.rua}${cliente.numero ? `, ${cliente.numero}` : ""}` : "",
+    cliente.bairro ? `Bairro: ${cliente.bairro}` : "",
+    [cliente.cidade, cliente.uf].filter(Boolean).join(" - "),
+    cliente.complemento ? `Complemento: ${cliente.complemento}` : "",
+    cliente.pontoReferencia ? `Referência: ${cliente.pontoReferencia}` : ""
+  ].filter(Boolean);
+  const subtotal = Math.max(0, Number(venda.valorVenda || 0));
+  const frete = getValorFrete(venda);
+  const total = getValorTotalPedido(venda);
+  const linhas = [
+    "JOIASPRO - PEDIDO PARA ENVIO",
+    `Pedido: ${venda.pedidoId || venda.id || "-"}    Data: ${formatDataBR(venda.data) || formatDataBR(getHojeSTR())}`,
+    "",
+    "CLIENTE",
+    cliente.nomeCompleto || "Cliente não localizado",
+    cliente.telefone ? `Telefone: ${cliente.telefone}` : "",
+    ...endereco,
+    "",
+    "DADOS DA PEÇA",
+    `Descrição: ${joia.descricao || categoria.nome || "Joia"}`,
+    `Referência: ${joia.referencia || "-"}`,
+    `Categoria: ${categoria.nome || "-"}`,
+    `Quantidade: ${Math.max(1, Number(venda.quantidade || 1))}`,
+    venda.vendedorNome ? `Vendedora: ${venda.vendedorNome}` : "",
+    "",
+    "PAGAMENTO E ENVIO",
+    `Subtotal da peça: ${formatMoeda(subtotal)}`,
+    `Frete: ${formatMoeda(frete)}`,
+    `Valor total: ${formatMoeda(total)}`,
+    `Forma de pagamento: ${getFormaPagamentoLabel(venda.formaPagamento)}`,
+    `Modalidade de envio: ${getModalidadeEnvioLabel(venda.modalidadeEnvio)}`
+  ];
+  if(venda.obs) { linhas.push("", "Observação:"); linhas.push(...quebrarTextoPedido(venda.obs)); }
+  const saida = [];
+  linhas.forEach(linha => { if(!linha) saida.push(""); else saida.push(...quebrarTextoPedido(linha)); });
+  return saida;
+}
+function montarConteudoPDFPedido(linhas) {
+  const out = ["BT", "/F1 11 Tf"];
+  let y = 790;
+  linhas.forEach((linha, index) => {
+    if(index === 0) out.push("/F1 16 Tf");
+    else if([3, 9, 16].includes(index)) out.push("/F1 12 Tf");
+    if(linha) out.push(`1 0 0 1 50 ${y} Tm (${escaparTextoPDF(linha)}) Tj`);
+    y -= linha ? 17 : 10;
+  });
+  out.push("ET");
+  return textoPDFSeguro(out.join("\n"));
+}
+function criarBytesPDFPedido(linhas) {
+  const limiteLinhasPagina = 43;
+  const paginas = [];
+  for(let i = 0; i < linhas.length; i += limiteLinhasPagina) paginas.push(linhas.slice(i, i + limiteLinhasPagina));
+  if(!paginas.length) paginas.push([""]);
+  const objetos = [];
+  objetos[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objetos[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  const pageRefs = [];
+  paginas.forEach((pagina, idx) => {
+    const pageObj = 4 + idx * 2;
+    const contentObj = pageObj + 1;
+    pageRefs.push(`${pageObj} 0 R`);
+    const conteudo = montarConteudoPDFPedido(pagina);
+    objetos[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObj} 0 R >>`;
+    objetos[contentObj] = `<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`;
+  });
+  objetos[2] = `<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${paginas.length} >>`;
+  let pdf = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+  const offsets = [0];
+  for(let i = 1; i < objetos.length; i++) {
+    if(!objetos[i]) continue;
+    offsets[i] = pdf.length;
+    pdf += `${i} 0 obj\n${textoPDFSeguro(objetos[i])}\nendobj\n`;
+  }
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objetos.length}\n0000000000 65535 f \n`;
+  for(let i = 1; i < objetos.length; i++) pdf += `${String(offsets[i] || 0).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objetos.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  const bytes = new Uint8Array(pdf.length);
+  for(let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 255;
+  return bytes;
+}
+function gerarPDFPedido(vendaId) {
+  const venda = (db.vendas || []).find(v => v.id === vendaId || v.pedidoId === vendaId);
+  if(!venda) return false;
+  try {
+    const bytes = criarBytesPDFPedido(montarLinhasPedidoPDF(venda));
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const cliente = getCliente(venda.clienteId);
+    const nome = normalizarTextoId(cliente?.nomeCompleto || "cliente");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pedido_${nome}_${venda.data || getHojeSTR()}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    return true;
+  } catch(e) {
+    console.error("PDF do pedido falhou", e);
+    alert("Não foi possível gerar o PDF deste pedido.");
+    return false;
+  }
 }
 
 function abrirReserva(joiaId) {
@@ -1218,7 +1400,7 @@ function renderPainelResultados() {
   const meses = getUltimosMeses(6, mesRef);
   const vendasPorMes = meses.map(m => {
     const lista = vendas.filter(v => String(v.data || "").slice(0,7) === m);
-    return { mes: m, label: labelMesCurto(m), valor: lista.reduce((s,v) => s + Number(v.valorVenda || 0), 0), qtd: lista.length };
+    return { mes: m, label: labelMesCurto(m), valor: lista.reduce((s,v) => s + getValorTotalPedido(v), 0), qtd: lista.length };
   });
   const maxMes = Math.max(1, ...vendasPorMes.map(x => x.valor));
   const porCatEstoque = (db.categorias || []).map(cat => {
@@ -1228,7 +1410,7 @@ function renderPainelResultados() {
     const qtdEstoque = itens.reduce((s,j) => s + Math.max(0, Number(j.quantidadeEstoque || 0)),0);
     const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
     const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
-    const receitaMes = vendidosMes.reduce((s,v)=>s + Number(v.valorVenda||0),0);
+    const receitaMes = vendidosMes.reduce((s,v)=>s + getValorTotalPedido(v),0);
     const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0) * Math.max(1, Number(v.quantidade||1)),0);
     const qtdVendidosMes = vendidosMes.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
     const qtdVendidosTotal = vendidosTotal.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
@@ -1243,14 +1425,14 @@ function renderPainelResultados() {
     const id = v.clienteId || "sem_cliente";
     const cli = getCliente(v.clienteId);
     acc[id] = acc[id] || { nome: cli?.nomeCompleto || "Cliente não localizado", qtd: 0, valor: 0 };
-    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
+    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += getValorTotalPedido(v);
     return acc;
   }, {})).sort((a,b)=>b.valor-a.valor).slice(0,5);
   const topItensMes = Object.values(vendasMesLista.reduce((acc, v) => {
     const joia = getJoia(v.joiaId);
     const id = v.joiaId || "sem_item";
     acc[id] = acc[id] || { ref: joia?.referencia || "-", nome: joia?.descricao || getCategoria(joia?.categoria).nome || "Item não localizado", qtd: 0, valor: 0 };
-    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += Number(v.valorVenda || 0);
+    acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += getValorTotalPedido(v);
     return acc;
   }, {})).sort((a,b)=> b.qtd - a.qtd || b.valor - a.valor).slice(0,5);
   qs("painelResumo").innerHTML = `
@@ -1303,7 +1485,7 @@ function renderPainelResultados() {
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
     ${vendasMesLista.map(v => {
       const joia = getJoia(v.joiaId); const cli = getCliente(v.clienteId);
-      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(v.formaPagamento || "")}${v.vendedorNome ? ` · Vendedora: ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
+      return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(joia?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(cli?.nomeCompleto || "Cliente não localizado")} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}${v.vendedorNome ? ` · Vendedora: ${escapeHTML(v.vendedorNome)}` : ""}</small><p>${escapeHTML(v.obs || "")}</p></div>`;
     }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
@@ -1331,7 +1513,7 @@ function renderPainelVendedora() {
   const mesRef = qs("painelMesVendedora")?.value || getMesAtualSTR();
   const vendas = getVendasDoVendedor(adminLogado.id, mesRef).sort((a,b) => String(b.data).localeCompare(String(a.data)));
   const unidades = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
-  const receita = vendas.reduce((s,v) => s + Number(v.valorVenda || 0), 0);
+  const receita = vendas.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const clientes = new Set(vendas.map(v => v.clienteId).filter(Boolean)).size;
   qs("painelResumoVendedora").innerHTML = `
     <div class="report-month-title">Minhas vendas · ${escapeHTML(nomeMesLongo(mesRef))}</div>
@@ -1341,7 +1523,7 @@ function renderPainelVendedora() {
       <div><small>Ticket médio</small><strong>${formatMoeda(vendas.length ? receita / vendas.length : 0)}</strong><em>dados do seu perfil</em></div>
     </div>
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
-    ${vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(v.valorVenda)}</strong><small>${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(v.formaPagamento || "")}${v.obs ? ` · ${escapeHTML(v.obs)}` : ""}</p></div>`; }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
+    ${vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}${v.obs ? ` · ${escapeHTML(v.obs)}` : ""}</p></div>`; }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
 }
 
@@ -1540,8 +1722,8 @@ function exportarCSV(tipo) {
     rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","vip","observacao"]];
     (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.vip ? "sim" : "nao", c.observacao]));
   } else if(tipo === "vendas") {
-    rows = [["data","referencia","cliente","vendedor","quantidade","valor_venda","forma_pagamento","observacao"]];
-    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), v.formaPagamento || "", v.obs || ""]));
+    rows = [["data","referencia","cliente","vendedor","quantidade","subtotal","frete","valor_total","forma_pagamento","modalidade_envio","observacao"]];
+    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), formatMoedaSem(getValorFrete(v)), formatMoedaSem(getValorTotalPedido(v)), getFormaPagamentoLabel(v.formaPagamento), getModalidadeEnvioLabel(v.modalidadeEnvio), v.obs || ""]));
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
