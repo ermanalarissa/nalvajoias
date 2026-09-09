@@ -1,4 +1,4 @@
-const APP_VERSION = "v0.5";
+const APP_VERSION = "v0.6";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 // A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
@@ -27,6 +27,17 @@ const TEMAS_PREDEFINIDOS = [
   { id: "safira", nome: "Safira", cor: "#1C3F75", sub: "#EEF4FF" }
 ];
 
+// Fotos reais usadas na capa do catálogo. Elas ficam no repositório para o
+// aplicativo carregar rapidamente, sem depender de um serviço externo.
+const CAPA_FOTOS = [
+  { src: "assets/capa/colar-ponto-luz.jpeg", titulo: "Brilho que fica", categoria: "Correntaria" },
+  { src: "assets/capa/escapulario-cartier.jpeg", titulo: "Detalhes com significado", categoria: "Escapulários" },
+  { src: "assets/capa/pulseiras-ouro.jpeg", titulo: "Ouro em movimento", categoria: "Pulseiras" },
+  { src: "assets/capa/pulseira-elos.jpeg", titulo: "Clássicos para todos os dias", categoria: "Pulseiras" },
+  { src: "assets/capa/aneis-coracao.jpeg", titulo: "Peças para celebrar", categoria: "Anéis" },
+  { src: "assets/capa/brincos-argolas.jpeg", titulo: "Elegância nos detalhes", categoria: "Argolas" }
+];
+
 const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
 let serverClockOffsetMs = 0;
@@ -45,6 +56,8 @@ let syncPendente = false;
 let cepLookupInProgress = false;
 let renderPendenteSync = false;
 let filtroClientes = "todos";
+let capaFotoAtual = 0;
+let capaTimer = null;
 
 function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
@@ -86,6 +99,41 @@ function setLoading(ativo, texto = "Processando...") { qs("loadingText").innerTe
 function getCategoria(id) { return (db.categorias || []).find(c => c.id === id) || { id, nome: id || "Sem categoria", icon: "◆" }; }
 function getCliente(id) { return (db.clientes || []).find(c => c.id === id) || null; }
 function getJoia(id) { return (db.joias || []).find(j => j.id === id) || null; }
+function parseNumeroFlexivel(valor) {
+  if(typeof valor === "number") return Number.isFinite(valor) ? valor : 0;
+  let texto = String(valor ?? "").trim().replace(/\s/g, "").replace(/R\$/gi, "");
+  if(texto.includes(",") && texto.includes(".")) texto = texto.replace(/\./g, "").replace(",", ".");
+  else if(texto.includes(",")) texto = texto.replace(",", ".");
+  const numero = parseFloat(texto.replace(/[^\d.-]/g, ""));
+  return Number.isFinite(numero) ? numero : 0;
+}
+function calcularCustoJoia(joia = {}) {
+  const gramas = Math.max(0, parseNumeroFlexivel(joia.gramasCusto ?? joia.pesoOuro));
+  const indice = Math.max(0, parseNumeroFlexivel(joia.indiceCusto ?? joia.indice));
+  const fatorDia = Math.max(0, parseNumeroFlexivel(joia.fatorDia ?? joia.fator));
+  const incidenciaImposto = Math.max(0, parseNumeroFlexivel(joia.incidenciaImposto ?? joia.imposto));
+  const custoBase = gramas * indice * fatorDia;
+  const valorImposto = custoBase * (incidenciaImposto / 100);
+  return { gramas, indice, fatorDia, incidenciaImposto, custoBase, valorImposto, total: custoBase + valorImposto };
+}
+function getCustoFixoJoia(joia = {}) {
+  const fixo = parseNumeroFlexivel(joia.custoFixo);
+  return joia.statusPagamento === "pago" && fixo > 0 ? fixo : 0;
+}
+function getCustoAtualJoia(joia = {}) {
+  const fixo = getCustoFixoJoia(joia);
+  if(fixo > 0) return fixo;
+  const calculado = calcularCustoJoia(joia).total;
+  return calculado > 0 ? calculado : Math.max(0, parseNumeroFlexivel(joia.precoCompra));
+}
+function getCustoVenda(venda = {}) {
+  const snapshot = parseNumeroFlexivel(venda.custoUnitario);
+  if(snapshot > 0) return snapshot;
+  return getCustoAtualJoia(getJoia(venda.joiaId) || {});
+}
+function getQuantidadeCustoJoia(joia = {}) {
+  return Math.max(1, Math.floor(Number(joia.quantidadeInicial || joia.quantidadeEstoque || 1)));
+}
 function getUsuarioAuditoria() { return adminLogado && adminLogado.nome ? adminLogado.nome : "Sistema"; }
 function getValorFrete(venda = {}) { return Math.max(0, Number(venda.valorFrete ?? venda.frete ?? 0) || 0); }
 function getValorTotalPedido(venda = {}) {
@@ -109,13 +157,13 @@ function exigirAdministrador() {
   return false;
 }
 function modalDeEdicaoAberto() {
-  return qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none" && ["modalJoiaForm","modalClienteForm","modalVenda","modalReserva","modalUsuarioForm","modalConfiguracoes","modalTemaVisual","modalTrocaSenha","modalListaEsperaForm","modalAnotacaoForm","modalRastreioPedido"].includes(m.id));
+  return qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none" && ["modalJoiaForm","modalClienteForm","modalVenda","modalReserva","modalUsuarioForm","modalConfiguracoes","modalTemaVisual","modalTrocaSenha","modalListaEsperaForm","modalAnotacaoForm","modalRastreioPedido","modalPagamentoCusto"].includes(m.id));
 }
 function atualizarPermissoesPerfil() {
   const vendedor = ehVendedora();
   const administrador = ehAdministrador();
   const alternar = (id, visivel) => { const el = qs(id); if(el) el.style.display = visivel ? "" : "none"; };
-  ["btnPainelGeral","btnDadosLoja","btnTemaVisual","btnAuditoria","btnAvancado","btnMenuVendasVendedoras"].forEach(id => alternar(id, administrador));
+  ["btnPainelGeral","btnDadosLoja","btnTemaVisual","btnAuditoria","btnAvancado","btnMenuVendasVendedoras","btnMenuFinanceiro"].forEach(id => alternar(id, administrador));
   alternar("btnPainelVendedora", vendedor);
   alternar("btnMenuPainelVendedora", vendedor);
   const campoCompra = qs("campoJoiaCompra");
@@ -201,8 +249,19 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     j.referencia = String(j.referencia || "").trim();
     j.categoria = j.categoria || "aneis";
     j.descricao = j.descricao || "";
-    j.pesoOuro = Number(j.pesoOuro || 0);
-    j.precoCompra = Number(j.precoCompra || 0);
+    j.pesoOuro = parseNumeroFlexivel(j.pesoOuro);
+    j.gramasCusto = parseNumeroFlexivel(j.gramasCusto ?? j.pesoOuro);
+    j.indiceCusto = parseNumeroFlexivel(j.indiceCusto ?? j.indice);
+    j.fatorDia = parseNumeroFlexivel(j.fatorDia ?? j.fator);
+    j.incidenciaImposto = Math.max(0, parseNumeroFlexivel(j.incidenciaImposto ?? j.imposto));
+    const custoCalculado = calcularCustoJoia(j);
+    j.custoBase = parseNumeroFlexivel(j.custoBase) || custoCalculado.custoBase;
+    j.custoCalculado = parseNumeroFlexivel(j.custoCalculado) || custoCalculado.total;
+    j.statusPagamento = ["pago", "aberto"].includes(j.statusPagamento) ? j.statusPagamento : (parseNumeroFlexivel(j.precoCompra) > 0 ? "pago" : "aberto");
+    j.dataPagamento = j.dataPagamento || "";
+    j.custoFixo = parseNumeroFlexivel(j.custoFixo) || (j.statusPagamento === "pago" ? parseNumeroFlexivel(j.precoCompra) : 0);
+    j.custoFixoData = j.custoFixoData || (j.statusPagamento === "pago" ? j.dataPagamento : "");
+    j.precoCompra = parseNumeroFlexivel(j.precoCompra) || (j.statusPagamento === "pago" ? j.custoFixo : j.custoCalculado);
     j.precoVenda = Number(j.precoVenda || 0);
     j.status = ["disponível","reservado","vendido"].includes(j.status) ? j.status : "disponível";
     const qtdInformada = Number(j.quantidadeEstoque);
@@ -247,6 +306,8 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.statusPedido = v.statusPedido || "pronto_para_envio";
     v.codigoRastreio = v.codigoRastreio || "";
     v.dataRastreio = Number(v.dataRastreio || 0);
+    v.custoUnitario = parseNumeroFlexivel(v.custoUnitario);
+    v.custoTotal = parseNumeroFlexivel(v.custoTotal) || (v.custoUnitario * v.quantidade);
     const totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, "valorTotalPedido") ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
     v.updatedAt = Number(v.updatedAt || 0);
@@ -494,6 +555,46 @@ function renderCabecalho() {
   if(db.loja?.logo) { qs("splashLogoObj").src = db.loja.logo; qs("splashLogoObj").style.display = "block"; qs("splashLogoFallback").style.display = "none"; }
 }
 
+function selecionarFotoCapa(indice) {
+  capaFotoAtual = (Number(indice) + CAPA_FOTOS.length) % CAPA_FOTOS.length;
+  renderCapaHome();
+}
+function renderCapaHome() {
+  const box = qs("homeCover");
+  if(!box || !CAPA_FOTOS.length) return;
+  const foto = CAPA_FOTOS[capaFotoAtual % CAPA_FOTOS.length];
+  const nomeLoja = db.loja?.nome || "Nalva Joias";
+  box.innerHTML = `
+    <div class="home-cover-main">
+      <img src="${escapeHTML(foto.src)}" alt="${escapeHTML(foto.titulo)}" loading="eager">
+      <div class="home-cover-shade"></div>
+      <div class="home-cover-copy"><span>${escapeHTML(nomeLoja)} · Ouro 18K</span><strong>${escapeHTML(foto.titulo)}</strong><small>${escapeHTML(foto.categoria)} · peças escolhidas para você</small></div>
+      <div class="home-cover-dots">${CAPA_FOTOS.map((_, i) => `<button type="button" aria-label="Foto ${i + 1}" class="${i === capaFotoAtual ? "active" : ""}" onclick="selecionarFotoCapa(${i})"></button>`).join("")}</div>
+    </div>
+    <div class="home-cover-thumbs">${CAPA_FOTOS.map((item, i) => `<button type="button" class="home-cover-thumb ${i === capaFotoAtual ? "active" : ""}" onclick="selecionarFotoCapa(${i})"><img src="${escapeHTML(item.src)}" alt="${escapeHTML(item.titulo)}" loading="lazy"><span>${escapeHTML(item.categoria)}</span></button>`).join("")}</div>`;
+  if(!capaTimer) capaTimer = setInterval(() => { if(document.visibilityState !== "hidden") selecionarFotoCapa(capaFotoAtual + 1); }, 7000);
+}
+
+function atualizarCustoVisualJoia() {
+  const form = {
+    pesoOuro: parseNumeroFlexivel(qs("joiaPeso")?.value),
+    gramasCusto: parseNumeroFlexivel(qs("joiaPeso")?.value),
+    indiceCusto: parseNumeroFlexivel(qs("joiaIndiceCusto")?.value),
+    fatorDia: parseNumeroFlexivel(qs("joiaFatorDia")?.value),
+    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value)
+  };
+  const custo = calcularCustoJoia(form);
+  if(qs("joiaCustoBase")) qs("joiaCustoBase").innerText = formatMoeda(custo.custoBase);
+  if(qs("joiaValorImposto")) qs("joiaValorImposto").innerText = formatMoeda(custo.valorImposto);
+  if(qs("joiaCustoCalculado")) qs("joiaCustoCalculado").innerText = formatMoeda(custo.total);
+  const status = qs("joiaStatusPagamento")?.value || "aberto";
+  const joiaAtual = getJoia(qs("joiaId")?.value) || {};
+  const fixo = status === "pago" ? (parseNumeroFlexivel(joiaAtual.custoFixo) || custo.total) : 0;
+  if(qs("joiaCustoFixo")) qs("joiaCustoFixo").innerText = fixo > 0 ? formatMoeda(fixo) : "Será fixado quando for pago";
+  if(qs("joiaCompra")) qs("joiaCompra").value = formatMoedaSem(fixo || custo.total);
+  if(qs("joiaCustoFixoHint")) qs("joiaCustoFixoHint").innerText = status === "pago" ? "Este valor fica congelado para o cálculo do lucro." : "Enquanto estiver em aberto, o custo é apenas uma estimativa e pode mudar com o fator do dia.";
+}
+
 function calcularResumo(mesRef = getMesAtualSTR()) {
   const joias = db.joias || [];
   const getQtd = (j) => Math.max(0, Math.floor(Number(j.quantidadeEstoque || 0)));
@@ -504,7 +605,7 @@ function calcularResumo(mesRef = getMesAtualSTR()) {
   const estoqueQtd = estoque.reduce((s,j) => s + getQtd(j), 0);
   const disponiveisQtd = disponiveis.reduce((s,j) => s + getQtd(j), 0);
   const reservadasQtd = reservadas.reduce((s,j) => s + getQtd(j), 0);
-  const custoEstoque = estoque.reduce((s,j) => s + Number(j.precoCompra || 0) * getQtd(j), 0);
+  const custoEstoque = estoque.reduce((s,j) => s + getCustoAtualJoia(j) * getQtd(j), 0);
   const vendaEstoque = estoque.reduce((s,j) => s + Number(j.precoVenda || 0) * getQtd(j), 0);
   const pesoEstoque = estoque.reduce((s,j) => s + Number(j.pesoOuro || 0) * getQtd(j), 0);
   const vendas = db.vendas || [];
@@ -513,7 +614,7 @@ function calcularResumo(mesRef = getMesAtualSTR()) {
   const vendasMes = vendas.filter(v => String(v.data || "").slice(0,7) === mesRef);
   const receitaMes = vendasMes.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const qtdVendidaMes = vendasMes.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
-  const custoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.precoCompra || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
+  const custoVendidoMes = vendasMes.reduce((s,v) => s + getCustoVenda(v) * Math.max(1, Number(v.quantidade || 1)), 0);
   const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
   const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
   const margemRealMes = receitaMes - custoVendidoMes;
@@ -600,6 +701,7 @@ function renderTudo(scrollTop = false) {
   aplicarTema();
   renderCabecalho();
   atualizarPerfilAdminUI();
+  renderCapaHome();
   renderCategorias();
   renderChips();
   renderLista();
@@ -629,6 +731,11 @@ function abrirFormularioJoia(id = "") {
     qs("joiaCategoria").value = j.categoria || "aneis";
     qs("joiaDescricao").value = j.descricao || "";
     qs("joiaPeso").value = j.pesoOuro ? formatDecimal(j.pesoOuro,3) : "";
+    qs("joiaIndiceCusto").value = j.indiceCusto ? formatMoedaSem(j.indiceCusto) : "";
+    qs("joiaFatorDia").value = j.fatorDia ? formatDecimal(j.fatorDia, 6) : "";
+    qs("joiaImposto").value = j.incidenciaImposto ? formatDecimal(j.incidenciaImposto, 2) : "";
+    qs("joiaStatusPagamento").value = j.statusPagamento || (j.custoFixo || j.precoCompra ? "pago" : "aberto");
+    qs("joiaDataPagamento").value = j.dataPagamento || "";
     qs("joiaCompra").value = j.precoCompra ? formatMoedaSem(j.precoCompra) : "";
     qs("joiaVenda").value = j.precoVenda ? formatMoedaSem(j.precoVenda) : "";
     qs("joiaQuantidade").value = Math.max(0, Number(j.quantidadeEstoque || 0));
@@ -643,6 +750,11 @@ function abrirFormularioJoia(id = "") {
     qs("joiaCategoria").value = estado.categoria !== "todos" ? estado.categoria : "aneis";
     qs("joiaDescricao").value = "";
     qs("joiaPeso").value = "";
+    qs("joiaIndiceCusto").value = "";
+    qs("joiaFatorDia").value = "";
+    qs("joiaImposto").value = "";
+    qs("joiaStatusPagamento").value = "aberto";
+    qs("joiaDataPagamento").value = "";
     qs("joiaCompra").value = "";
     qs("joiaVenda").value = "";
     qs("joiaQuantidade").value = "1";
@@ -652,6 +764,7 @@ function abrirFormularioJoia(id = "") {
     qs("joiaObs").value = "";
   }
   atualizarPreviewFotoJoia();
+  atualizarCustoVisualJoia();
   abrirModal("modalJoiaForm");
 }
 
@@ -718,6 +831,19 @@ function salvarJoiaForm() {
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
   const quantidadeAnterior = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
   const precoCompraAnterior = Number(joia.precoCompra || 0);
+  const custoFormula = calcularCustoJoia({
+    pesoOuro: parseNumeroFlexivel(qs("joiaPeso").value),
+    gramasCusto: parseNumeroFlexivel(qs("joiaPeso").value),
+    indiceCusto: parseNumeroFlexivel(qs("joiaIndiceCusto")?.value),
+    fatorDia: parseNumeroFlexivel(qs("joiaFatorDia")?.value),
+    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value)
+  });
+  const statusPagamento = qs("joiaStatusPagamento")?.value || "aberto";
+  const custoFixoAnterior = parseNumeroFlexivel(joia.custoFixo);
+  const estavaPago = joia.statusPagamento === "pago" && custoFixoAnterior > 0;
+  const custoFixo = statusPagamento === "pago" ? (estavaPago ? custoFixoAnterior : (custoFormula.total || precoCompraAnterior)) : custoFixoAnterior;
+  const dataPagamento = statusPagamento === "pago" ? (qs("joiaDataPagamento")?.value || joia.dataPagamento || getHojeSTR()) : (joia.dataPagamento || "");
+  const custoAtual = custoFormula.total || custoFixo || precoCompraAnterior;
   Object.assign(joia, {
     referencia,
     categoria,
@@ -725,7 +851,17 @@ function salvarJoiaForm() {
     pesoOuro: parseDecimal(qs("joiaPeso").value),
     // O campo de custo fica oculto para a vendedora e nunca pode ser zerado
     // por uma edição feita nesse perfil.
-    precoCompra: ehVendedora() ? precoCompraAnterior : parseMoeda(qs("joiaCompra").value),
+    precoCompra: ehVendedora() ? precoCompraAnterior : (statusPagamento === "pago" ? custoFixo : custoAtual),
+    gramasCusto: custoFormula.gramas,
+    indiceCusto: custoFormula.indice,
+    fatorDia: custoFormula.fatorDia,
+    incidenciaImposto: custoFormula.incidenciaImposto,
+    custoBase: custoFormula.custoBase,
+    custoCalculado: custoFormula.total,
+    custoFixo,
+    statusPagamento,
+    dataPagamento,
+    custoFixoData: statusPagamento === "pago" ? dataPagamento : (joia.custoFixoData || ""),
     precoVenda: parseMoeda(qs("joiaVenda").value),
     quantidadeEstoque,
     quantidadeInicial: Math.max(Number(joia.quantidadeInicial || 0), quantidadeEstoque),
@@ -748,10 +884,11 @@ function abrirDetalheJoia(id) {
   const j = getJoia(id); if(!j) return;
   const cat = getCategoria(j.categoria);
   const cli = getCliente(j.clienteId);
-  const lucro = Number(j.precoVenda || 0) - Number(j.precoCompra || 0);
+  const custoAtual = getCustoAtualJoia(j);
+  const lucro = Number(j.precoVenda || 0) - custoAtual;
   const vendas = (db.vendas || []).filter(v => v.joiaId === j.id).sort((a,b) => String(b.data).localeCompare(String(a.data)));
   const blocoFinanceiroJoia = ehAdministrador() ? `
-       <div class="detail-box"><small>Compra</small><strong>${formatMoeda(j.precoCompra)}</strong></div>
+       <div class="detail-box"><small>Custo ${j.statusPagamento === "pago" ? "fixo" : "estimado"}</small><strong>${formatMoeda(custoAtual)}</strong><small>${j.statusPagamento === "pago" ? `pago em ${escapeHTML(formatDataBR(j.dataPagamento) || "-")}` : "em aberto"}</small></div>
        <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>` : "";
   qs("detalheJoiaConteudo").innerHTML = `
     <div class="detail-header">
@@ -1274,7 +1411,8 @@ function salvarVenda() {
   const subtotal = Math.max(0, parseMoeda(qs("vendaValor").value));
   const valorFrete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
   const modalidadeEnvio = qs("vendaModalidadeEnvio")?.value || "pac";
-  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido: qs("vendaStatusPedido")?.value || "pronto_para_envio", codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
+  const custoUnitario = getCustoAtualJoia(joia);
+  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, custoUnitario, custoTotal: custoUnitario * qtdSolicitada, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido: qs("vendaStatusPedido")?.value || "pronto_para_envio", codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
   joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
@@ -1646,10 +1784,10 @@ function renderPainelResultados() {
     const vendidosMes = vendasMesLista.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
     const vendidosTotal = vendas.filter(v => getJoia(v.joiaId)?.categoria === cat.id);
     const qtdEstoque = itens.reduce((s,j) => s + Math.max(0, Number(j.quantidadeEstoque || 0)),0);
-    const compra = itens.reduce((s,j) => s + Number(j.precoCompra||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
+    const compra = itens.reduce((s,j) => s + getCustoAtualJoia(j) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
     const venda = itens.reduce((s,j) => s + Number(j.precoVenda||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0);
     const receitaMes = vendidosMes.reduce((s,v)=>s + getValorTotalPedido(v),0);
-    const custoMes = vendidosMes.reduce((s,v)=>s + Number(getJoia(v.joiaId)?.precoCompra||0) * Math.max(1, Number(v.quantidade||1)),0);
+    const custoMes = vendidosMes.reduce((s,v)=>s + getCustoVenda(v) * Math.max(1, Number(v.quantidade||1)),0);
     const qtdVendidosMes = vendidosMes.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
     const qtdVendidosTotal = vendidosTotal.reduce((s,v)=>s + Math.max(1, Number(v.quantidade||1)),0);
     return { cat, qtd: qtdEstoque, vendidosMes: qtdVendidosMes, vendidosTotal: qtdVendidosTotal, peso: itens.reduce((s,j) => s + Number(j.pesoOuro||0) * Math.max(0, Number(j.quantidadeEstoque || 0)),0), compra, venda, receitaMes, custoMes };
@@ -1790,6 +1928,86 @@ function renderPainelVendasVendedoras() {
   const nomeVendedora = vendedorId ? (getPerfisAdminDisponiveis().find(p => p.id === vendedorId)?.nome || "Vendedora") : "Todas as vendedoras";
   qs("resumoVendasVendedoras").innerHTML = `<div class="report-month-title">${escapeHTML(nomeVendedora)} · ${escapeHTML(nomeMesLongo(mes))}</div><div class="report-hero report-hero-3 seller-report-hero"><div><small>Faturamento</small><strong>${formatMoeda(receita)}</strong><em>${vendas.length} venda(s)</em></div><div><small>Peças vendidas</small><strong>${unidades}</strong><em>no mês selecionado</em></div><div><small>Vendedoras com vendas</small><strong>${new Set(vendas.map(v => v.vendedorId || v.vendedorNome)).size}</strong><em>dados completos do administrador</em></div></div>`;
   qs("listaVendasVendedoras").innerHTML = vendas.length ? vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data))} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(v.vendedorNome || "Vendedora não informada")} · ${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getStatusPedidoLabel(v.statusPedido))} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${v.codigoRastreio ? ` · ${escapeHTML(v.codigoRastreio)}` : ""}</p></div>`; }).join("") : `<div class="empty-state" style="height:180px"><div>📈</div><strong>Nenhuma venda encontrada</strong><p>Escolha outro mês ou vendedora.</p></div>`;
+}
+
+let abaFinanceiroAtual = "abertos";
+function formatarFormulaCusto(joia) {
+  const custo = calcularCustoJoia(joia);
+  if(!custo.gramas && !custo.indice && !custo.fatorDia) return "Fórmula ainda não preenchida";
+  return `${formatDecimal(custo.gramas, 3)} g × ${formatMoeda(custo.indice)} × ${formatDecimal(custo.fatorDia, 6)} + ${formatDecimal(custo.incidenciaImposto, 2)}% imposto`;
+}
+function abrirPainelFinanceiroCustos(tab = "abertos") {
+  if(!exigirAdministrador()) return;
+  trocarAbaFinanceiro(tab);
+  abrirModal("modalFinanceiroCustos");
+}
+function trocarAbaFinanceiro(tab = "abertos") {
+  abaFinanceiroAtual = ["abertos", "pagos"].includes(tab) ? tab : "abertos";
+  qsa("[data-fin-tab]").forEach(btn => btn.classList.toggle("active", btn.dataset.finTab === abaFinanceiroAtual));
+  renderPainelFinanceiroCustos();
+}
+function renderPainelFinanceiroCustos() {
+  if(!ehAdministrador()) return;
+  const joias = [...(db.joias || [])];
+  const abertos = joias.filter(j => j.statusPagamento !== "pago").sort((a,b) => String(a.dataEntrada || "").localeCompare(String(b.dataEntrada || "")));
+  const pagos = joias.filter(j => j.statusPagamento === "pago").sort((a,b) => String(b.dataPagamento || "").localeCompare(String(a.dataPagamento || "")));
+  const valorAberto = abertos.reduce((s,j) => s + getCustoAtualJoia(j) * getQuantidadeCustoJoia(j), 0);
+  const valorFixo = pagos.reduce((s,j) => s + getCustoFixoJoia(j) * getQuantidadeCustoJoia(j), 0);
+  if(qs("resumoFinanceiroCustos")) qs("resumoFinanceiroCustos").innerHTML = `<div class="report-hero report-hero-3 finance-hero"><div><small>Em aberto</small><strong>${formatMoeda(valorAberto)}</strong><em>${abertos.length} peça(s) aguardando pagamento</em></div><div><small>Custo fixado</small><strong>${formatMoeda(valorFixo)}</strong><em>${pagos.length} peça(s) pagas</em></div><div><small>Fórmula aplicada</small><strong>g × índice × fator</strong><em>imposto separado no cálculo</em></div></div>`;
+  const lista = abaFinanceiroAtual === "abertos" ? abertos : pagos;
+  if(qs("listaFinanceiroCustos")) qs("listaFinanceiroCustos").innerHTML = lista.length ? lista.map(j => {
+    const qtd = getQuantidadeCustoJoia(j);
+    const custo = abaFinanceiroAtual === "abertos" ? getCustoAtualJoia(j) : getCustoFixoJoia(j);
+    const botao = abaFinanceiroAtual === "abertos" ? `<button class="btn-action compact" onclick="abrirPagamentoCusto('${escapeHTML(j.id)}')">Marcar como pago</button>` : `<button class="btn-outline compact" onclick="reabrirCustoJoia('${escapeHTML(j.id)}')">Reabrir custo</button>`;
+    return `<div class="finance-card"><div><strong>${escapeHTML(j.referencia || "Sem referência")} · ${escapeHTML(j.descricao || getCategoria(j.categoria).nome)}</strong><small>${formatarFormulaCusto(j)}</small><small>${qtd} un. · custo ${abaFinanceiroAtual === "abertos" ? "estimado" : "fixo"}: ${formatMoeda(custo)}${j.dataPagamento ? ` · pago em ${escapeHTML(formatDataBR(j.dataPagamento))}` : ""}</small></div><div class="finance-card-actions"><strong>${formatMoeda(custo * qtd)}</strong>${botao}</div></div>`;
+  }).join("") : `<div class="empty-state compact-empty"><div>${abaFinanceiroAtual === "abertos" ? "✓" : "◆"}</div><strong>${abaFinanceiroAtual === "abertos" ? "Nenhum custo em aberto" : "Nenhum custo pago registrado"}</strong><p>${abaFinanceiroAtual === "abertos" ? "As peças pagas aparecerão aqui até serem quitadas." : "O custo fixo das peças pagas aparecerá aqui."}</p></div>`;
+}
+function abrirPagamentoCusto(id) {
+  if(!exigirAdministrador()) return;
+  const j = getJoia(id); if(!j) return;
+  qs("pagamentoCustoJoiaId").value = id;
+  qs("pagamentoCustoResumo").innerText = `${j.referencia || "Peça"} · ${j.descricao || getCategoria(j.categoria).nome}`;
+  qs("pagamentoCustoData").value = getHojeSTR();
+  qs("pagamentoCustoFator").value = j.fatorDia ? formatDecimal(j.fatorDia, 6) : "";
+  qs("pagamentoCustoIndice").value = j.indiceCusto ? formatMoedaSem(j.indiceCusto) : "";
+  atualizarPagamentoCustoVisual();
+  abrirModal("modalPagamentoCusto");
+}
+function atualizarPagamentoCustoVisual() {
+  const j = getJoia(qs("pagamentoCustoJoiaId")?.value) || {};
+  const calculo = calcularCustoJoia({ ...j, indiceCusto: parseNumeroFlexivel(qs("pagamentoCustoIndice")?.value), fatorDia: parseNumeroFlexivel(qs("pagamentoCustoFator")?.value) });
+  if(qs("pagamentoCustoValor")) qs("pagamentoCustoValor").innerText = formatMoeda(calculo.total || parseNumeroFlexivel(j.precoCompra));
+}
+function salvarPagamentoCusto() {
+  if(!exigirAdministrador()) return;
+  const joia = getJoia(qs("pagamentoCustoJoiaId").value); if(!joia) return;
+  const indice = parseNumeroFlexivel(qs("pagamentoCustoIndice").value);
+  const fator = parseNumeroFlexivel(qs("pagamentoCustoFator").value);
+  const data = qs("pagamentoCustoData").value || getHojeSTR();
+  if(!indice || !fator) return alert("Informe o índice e o fator do dia para fixar o custo.");
+  const calculo = calcularCustoJoia({ ...joia, indiceCusto: indice, fatorDia: fator });
+  const custoFixo = calculo.total || parseNumeroFlexivel(joia.precoCompra);
+  if(!custoFixo) return alert("Não foi possível calcular o custo. Confira gramas, índice e fator do dia.");
+  Object.assign(joia, { indiceCusto: indice, fatorDia: fator, custoBase: calculo.custoBase, incidenciaImposto: calculo.incidenciaImposto, custoCalculado: calculo.total, custoFixo, precoCompra: custoFixo, statusPagamento: "pago", dataPagamento: data, custoFixoData: data });
+  (db.vendas || []).filter(v => v.joiaId === joia.id).forEach(v => { v.custoUnitario = custoFixo; v.custoTotal = custoFixo * Math.max(1, Number(v.quantidade || 1)); tocarRegistro(v); });
+  tocarRegistro(joia);
+  registrarAuditoria("Custo da peça fixado", `Ref. ${joia.referencia} · ${formatMoeda(custoFixo)}`);
+  salvarBanco();
+  fecharModal("modalPagamentoCusto");
+  trocarAbaFinanceiro("abertos");
+  renderTudo();
+}
+function reabrirCustoJoia(id) {
+  if(!exigirAdministrador()) return;
+  const joia = getJoia(id); if(!joia) return;
+  if(!confirm("Reabrir o custo desta peça para recalcular depois do pagamento?")) return;
+  joia.statusPagamento = "aberto";
+  joia.precoCompra = getCustoAtualJoia(joia);
+  tocarRegistro(joia);
+  registrarAuditoria("Custo da peça reaberto", `Ref. ${joia.referencia}`);
+  salvarBanco();
+  renderPainelFinanceiroCustos();
+  renderTudo();
 }
 
 let abaAcompanhamentoAtual = "espera";
@@ -2098,8 +2316,8 @@ function exportarCSV(tipo) {
   if(!exigirAdministrador()) return;
   let rows = [];
   if(tipo === "joias") {
-    rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
-    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
+    rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","indice_custo","fator_dia","incidencia_imposto","status_pagamento","data_pagamento","custo_base","custo_calculado","custo_fixo","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
+    (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.indiceCusto), formatDecimal(j.fatorDia,6), formatDecimal(j.incidenciaImposto,2), j.statusPagamento || "aberto", j.dataPagamento || "", formatMoedaSem(j.custoBase), formatMoedaSem(j.custoCalculado), formatMoedaSem(getCustoFixoJoia(j)), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
     rows = [["nome_completo","cpf","email","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","vip","observacao"]];
     (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.cpf, c.email, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.vip ? "sim" : "nao", c.observacao]));

@@ -1,13 +1,19 @@
-const CACHE_NAME = 'joiaspro-v0.5';
+const CACHE_NAME = 'joiaspro-v0.6';
 const APP_SHELL = [
   './',
   './index.html',
-  './style.css?v=0.5',
-  './app.js?v=0.5',
+  './style.css?v=0.6',
+  './app.js?v=0.6',
   './manifest.json',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './assets/capa/colar-ponto-luz.jpeg',
+  './assets/capa/escapulario-cartier.jpeg',
+  './assets/capa/pulseiras-ouro.jpeg',
+  './assets/capa/pulseira-elos.jpeg',
+  './assets/capa/aneis-coracao.jpeg',
+  './assets/capa/brincos-argolas.jpeg'
 ];
 
 self.addEventListener('install', (event) => {

@@ -155,8 +155,27 @@ function normalizarBanco(dados) {
     v.statusPedido = v.statusPedido || 'pronto_para_envio';
     v.codigoRastreio = v.codigoRastreio || '';
     v.dataRastreio = Number(v.dataRastreio || 0);
+    v.custoUnitario = Number(v.custoUnitario || 0);
+    v.custoTotal = Number(v.custoTotal || 0) || (v.custoUnitario * Math.max(1, Number(v.quantidade || 1)));
     var totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, 'valorTotalPedido') ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
+  });
+  dados.joias.forEach(function(j, idx) {
+    if (!j.id) j.id = 'joia_' + idx;
+    j.pesoOuro = Number(j.pesoOuro || 0);
+    j.gramasCusto = Number(j.gramasCusto != null ? j.gramasCusto : j.pesoOuro) || 0;
+    j.indiceCusto = Number(j.indiceCusto != null ? j.indiceCusto : j.indice) || 0;
+    j.fatorDia = Number(j.fatorDia != null ? j.fatorDia : j.fator) || 0;
+    j.incidenciaImposto = Math.max(0, Number(j.incidenciaImposto != null ? j.incidenciaImposto : j.imposto) || 0);
+    var custoBase = j.gramasCusto * j.indiceCusto * j.fatorDia;
+    var custoCalculado = custoBase * (1 + j.incidenciaImposto / 100);
+    j.custoBase = Number(j.custoBase || 0) || custoBase;
+    j.custoCalculado = Number(j.custoCalculado || 0) || custoCalculado;
+    j.statusPagamento = j.statusPagamento === 'pago' || j.statusPagamento === 'aberto' ? j.statusPagamento : (Number(j.precoCompra || 0) > 0 ? 'pago' : 'aberto');
+    j.dataPagamento = j.dataPagamento || '';
+    j.custoFixo = Number(j.custoFixo || 0) || (j.statusPagamento === 'pago' ? Number(j.precoCompra || 0) : 0);
+    j.custoFixoData = j.custoFixoData || (j.statusPagamento === 'pago' ? j.dataPagamento : '');
+    j.precoCompra = Number(j.precoCompra || 0) || (j.statusPagamento === 'pago' ? j.custoFixo : j.custoCalculado);
   });
   dados.listaEspera.forEach(function(item, idx) {
     if (!item.id) item.id = 'espera_' + idx;
