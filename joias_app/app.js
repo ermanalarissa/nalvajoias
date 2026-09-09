@@ -1,4 +1,4 @@
-const APP_VERSION = "v0.4";
+const APP_VERSION = "v0.5";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 // A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
@@ -69,6 +69,7 @@ function formatDecimal(valor, casas = 2) { return Number(valor || 0).toLocaleStr
 function maskMoeda(el) { let v = el.value.replace(/\D/g, ""); if(!v) { el.value = ""; return; } el.value = (parseFloat(v) / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 }); }
 function maskDecimal(el, casas = 3) { let v = el.value.replace(/[^\d,\.]/g, "").replace(".", ","); const partes = v.split(","); if(partes.length > 2) v = partes[0] + "," + partes.slice(1).join(""); if(partes[1] && partes[1].length > casas) v = partes[0] + "," + partes[1].slice(0, casas); el.value = v; }
 function maskTelefone(el) { let v = el.value.replace(/\D/g, ""); if(v.length > 11) v = v.slice(0, 11); v = v.replace(/^(\d{2})(\d)/, "($1) $2"); v = v.replace(/(\d{5})(\d{4})$/, "$1-$2"); el.value = v; }
+function maskCPF(el) { let v = el.value.replace(/\D/g, "").slice(0, 11); if(v.length > 9) v = `${v.slice(0,3)}.${v.slice(3,6)}.${v.slice(6,9)}-${v.slice(9)}`; else if(v.length > 6) v = `${v.slice(0,3)}.${v.slice(3,6)}.${v.slice(6)}`; else if(v.length > 3) v = `${v.slice(0,3)}.${v.slice(3)}`; el.value = v; }
 function maskCEP(el) { let v = el.value.replace(/\D/g, "").slice(0, 8); if(v.length > 5) v = `${v.slice(0,5)}-${v.slice(5)}`; el.value = v; }
 function abrirModal(id) { const el = qs(id); if(el) { el.style.display = "flex"; const modal = el.querySelector(".modal"); if(modal) modal.scrollTop = 0; } }
 function fecharModal(id) {
@@ -96,6 +97,10 @@ function getFormaPagamentoLabel(valor) {
   return mapa[valor] || valor || "Não informado";
 }
 function getModalidadeEnvioLabel(valor) { return String(valor || "").toLowerCase() === "sedex" ? "Sedex" : String(valor || "").toLowerCase() === "pac" ? "PAC" : valor || "Não informado"; }
+function getStatusPedidoLabel(valor) {
+  const mapa = { pronto_para_envio: "Pronto para envio", aguardando_fabricacao: "Aguardando fabricação", enviado: "Enviado", entregue: "Entregue" };
+  return mapa[valor] || valor || "Pronto para envio";
+}
 function ehVendedora(perfil = adminLogado) { return !!perfil && (perfil.tipo === "vendedora" || perfil.isAdmin === false); }
 function ehAdministrador(perfil = adminLogado) { return !!perfil && !ehVendedora(perfil); }
 function exigirAdministrador() {
@@ -104,13 +109,13 @@ function exigirAdministrador() {
   return false;
 }
 function modalDeEdicaoAberto() {
-  return qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none" && ["modalJoiaForm","modalClienteForm","modalVenda","modalReserva","modalUsuarioForm","modalConfiguracoes","modalTemaVisual","modalTrocaSenha"].includes(m.id));
+  return qsa(".modal-overlay").some(m => getComputedStyle(m).display !== "none" && ["modalJoiaForm","modalClienteForm","modalVenda","modalReserva","modalUsuarioForm","modalConfiguracoes","modalTemaVisual","modalTrocaSenha","modalListaEsperaForm","modalAnotacaoForm","modalRastreioPedido"].includes(m.id));
 }
 function atualizarPermissoesPerfil() {
   const vendedor = ehVendedora();
   const administrador = ehAdministrador();
   const alternar = (id, visivel) => { const el = qs(id); if(el) el.style.display = visivel ? "" : "none"; };
-  ["btnPainelGeral","btnDadosLoja","btnTemaVisual","btnAuditoria","btnAvancado"].forEach(id => alternar(id, administrador));
+  ["btnPainelGeral","btnDadosLoja","btnTemaVisual","btnAuditoria","btnAvancado","btnMenuVendasVendedoras"].forEach(id => alternar(id, administrador));
   alternar("btnPainelVendedora", vendedor);
   alternar("btnMenuPainelVendedora", vendedor);
   const campoCompra = qs("campoJoiaCompra");
@@ -147,11 +152,13 @@ function criarBancoBase() {
     joias: [],
     clientes: [],
     vendas: [],
+    listaEspera: [],
+    anotacoes: [],
     administradores: [],
     auditoria: [],
     configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
     configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
-    _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
+    _deleted: { joias: {}, clientes: {}, vendas: {}, listaEspera: {}, anotacoes: {}, categorias: {}, administradores: {} }
   };
 }
 
@@ -171,13 +178,15 @@ function normalizarBanco(dados, base = criarBancoBase()) {
   dados.joias = Array.isArray(dados.joias) ? dados.joias : [];
   dados.clientes = Array.isArray(dados.clientes) ? dados.clientes : [];
   dados.vendas = Array.isArray(dados.vendas) ? dados.vendas : [];
+  dados.listaEspera = Array.isArray(dados.listaEspera) ? dados.listaEspera : [];
+  dados.anotacoes = Array.isArray(dados.anotacoes) ? dados.anotacoes : [];
   dados.administradores = Array.isArray(dados.administradores) ? dados.administradores : [];
   dados.auditoria = filtrarAuditoriaRecente(Array.isArray(dados.auditoria) ? dados.auditoria : []);
   dados.configGerais = { ...base.configGerais, ...(dados.configGerais || {}) };
   dados.configs = { ...base.configs, ...(dados.configs || {}) };
   dados.configs.clientId = dados.configs.clientId || getClientIdLocal();
   dados._deleted = { ...base._deleted, ...(dados._deleted || {}) };
-  ["joias","clientes","vendas","categorias","administradores"].forEach(k => dados._deleted[k] = dados._deleted[k] || {});
+  ["joias","clientes","vendas","listaEspera","anotacoes","categorias","administradores"].forEach(k => dados._deleted[k] = dados._deleted[k] || {});
 
   dados.categorias = dados.categorias.map((c, idx) => ({ id: c.id || normalizarTextoId(c.nome), nome: c.nome || "Categoria", icon: c.icon || "◆", ordem: Number(c.ordem || idx + 1), updatedAt: Number(c.updatedAt || 0), ...c }));
   CATEGORIAS_PADRAO.forEach(cat => {
@@ -208,6 +217,8 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     if(!c.id) c.id = `cli_${normalizarTextoId(c.nomeCompleto || c.nome)}_${idx}`;
     c.nomeCompleto = c.nomeCompleto || c.nome || "";
     c.telefone = c.telefone || "";
+    c.email = c.email || "";
+    c.cpf = c.cpf || "";
     c.cep = c.cep || "";
     // Migração transparente do endereço antigo para o novo campo de rua.
     c.rua = c.rua || c.enderecoEntrega || "";
@@ -233,9 +244,33 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.valorFrete = Math.max(0, Number(v.valorFrete ?? v.frete ?? 0) || 0);
     v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || "";
     v.pedidoId = v.pedidoId || v.id;
+    v.statusPedido = v.statusPedido || "pronto_para_envio";
+    v.codigoRastreio = v.codigoRastreio || "";
+    v.dataRastreio = Number(v.dataRastreio || 0);
     const totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, "valorTotalPedido") ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
     v.updatedAt = Number(v.updatedAt || 0);
+  });
+
+  dados.listaEspera.forEach((item, idx) => {
+    if(!item.id) item.id = `espera_${idx}`;
+    item.clienteId = item.clienteId || "";
+    item.clienteNome = item.clienteNome || (dados.clientes.find(c => c.id === item.clienteId)?.nomeCompleto || "");
+    item.descricao = item.descricao || item.peca || "";
+    item.dataPrevista = item.dataPrevista || "";
+    item.observacao = item.observacao || item.obs || "";
+    item.status = item.status || "aguardando";
+    item.updatedAt = Number(item.updatedAt || 0);
+  });
+  dados.anotacoes.forEach((item, idx) => {
+    if(!item.id) item.id = `anotacao_${idx}`;
+    item.titulo = item.titulo || "Anotação";
+    item.texto = item.texto || item.observacao || "";
+    item.dataLembrete = item.dataLembrete || "";
+    item.prioridade = item.prioridade || "normal";
+    item.concluida = !!item.concluida;
+    item.usuarioNome = item.usuarioNome || "";
+    item.updatedAt = Number(item.updatedAt || 0);
   });
 
   dados.administradores.forEach((a, idx) => {
@@ -308,6 +343,7 @@ function getPerfisAdminDisponiveis() {
     const tipo = a.tipo || (a.isAdmin === false ? "vendedora" : "admin");
     return { id: a.id, nome: a.nome, senha: String(a.senha), tipo, isAdmin: tipo !== "vendedora", forcarTrocaSenha: !!a.forcarTrocaSenha };
   });
+
   if(perfis.length === 0) perfis.push({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), tipo: "admin", isAdmin: true, forcarTrocaSenha: false });
   return perfis;
 }
@@ -952,8 +988,86 @@ function renderPedidosClientes() {
     const cliente = getCliente(v.clienteId);
     const joia = getJoia(v.joiaId);
     const endereco = cliente ? enderecoClienteParaExibicao(cliente) : "Endereço não localizado";
-    return `<div class="order-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia removida")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(getValorTotalPedido(v))}</small><small>${escapeHTML(endereco)}</small><small>${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))} · ${escapeHTML(getModalidadeEnvioLabel(v.modalidadeEnvio))}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small></div><button class="btn-outline small" onclick="gerarPDFPedido('${escapeHTML(v.id)}')">Baixar PDF</button></div>`;
+    const rastreio = v.codigoRastreio ? ` · rastreio ${escapeHTML(v.codigoRastreio)}` : "";
+    return `<div class="order-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia removida")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${formatMoeda(getValorTotalPedido(v))}</small><small>${escapeHTML(endereco)}</small><small>${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))} · ${escapeHTML(getModalidadeEnvioLabel(v.modalidadeEnvio))} · ${escapeHTML(getStatusPedidoLabel(v.statusPedido))}${rastreio}${v.vendedorNome ? ` · ${escapeHTML(v.vendedorNome)}` : ""}</small></div><div class="order-actions"><button class="btn-outline small" onclick="gerarPDFPedido('${escapeHTML(v.id)}')">PDF</button><button class="btn-outline small" onclick="enviarPedidoEmail('${escapeHTML(v.id)}')">E-mail</button><button class="btn-outline small" onclick="abrirRastreioPedido('${escapeHTML(v.id)}')">${v.codigoRastreio ? "Atualizar rastreio" : "Adicionar rastreio"}</button></div></div>`;
   }).join("") : `<div class="empty-state" style="height:180px"><div>🧾</div><strong>Nenhum pedido encontrado</strong><p>Registre uma venda para gerar o pedido.</p></div>`;
+}
+
+function montarMensagemPedidoEmail(venda) {
+  const cliente = getCliente(venda?.clienteId) || {};
+  const joia = getJoia(venda?.joiaId) || {};
+  return `Olá${cliente.nomeCompleto ? `, ${cliente.nomeCompleto}` : ""}!\n\nObrigada por essa venda, você acaba de adquirir um produto em ouro 18K, logo mais te enviamos o código de rastreio para acompanhar o seu pedido.\n\nPedido: ${venda?.pedidoId || venda?.id || "-"}\nPeça: ${joia.referencia || joia.descricao || "Joia"}\nValor total: ${formatMoeda(getValorTotalPedido(venda))}\nModalidade de envio: ${getModalidadeEnvioLabel(venda?.modalidadeEnvio)}\n\nCom carinho,\n${db.loja?.nome || "JoiasPro"}`;
+}
+function montarMensagemRastreio(venda) {
+  const cliente = getCliente(venda?.clienteId) || {};
+  const codigo = String(venda?.codigoRastreio || "").toUpperCase();
+  return `Olá${cliente.nomeCompleto ? `, ${cliente.nomeCompleto}` : ""}! Seu pedido ${venda?.pedidoId || ""} foi enviado.\n\nCódigo de rastreio: ${codigo}\nAcompanhe pelos Correios: https://rastreamento.correios.com.br/app/index.php?objetop=${encodeURIComponent(codigo)}\n\n${db.loja?.nome || "JoiasPro"}`;
+}
+function abrirLinkExterno(url) {
+  if(!url) return false;
+  try {
+    const janela = window.open(url, "_blank", "noopener,noreferrer");
+    if(janela) return true;
+  } catch(e) {}
+  try { window.location.href = url; return true; } catch(e) { return false; }
+}
+async function enviarPedidoEmail(vendaId) {
+  const venda = (db.vendas || []).find(v => v.id === vendaId || v.pedidoId === vendaId);
+  if(!venda) return false;
+  const cliente = getCliente(venda.clienteId) || {};
+  if(!cliente.email) return alert("Cadastre o e-mail do cliente antes de enviar o pedido.");
+  const assunto = `Pedido ${venda.pedidoId || venda.id} · ${db.loja?.nome || "JoiasPro"}`;
+  const corpo = montarMensagemPedidoEmail(venda);
+  try {
+    const bytes = criarBytesPDFPedido(venda, { loja: db.loja });
+    if(typeof File !== "undefined" && navigator.share && navigator.canShare) {
+      const arquivo = new File([bytes], `pedido_${normalizarTextoId(cliente.nomeCompleto || "cliente")}_${venda.data || getHojeSTR()}.pdf`, { type: "application/pdf" });
+      if(navigator.canShare({ files: [arquivo] })) {
+        await navigator.share({ title: assunto, text: corpo, files: [arquivo] });
+        return true;
+      }
+    }
+  } catch(e) {
+    if(e && e.name === "AbortError") return false;
+  }
+  gerarPDFPedido(venda.id);
+  const mailto = `mailto:${encodeURIComponent(cliente.email)}?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(`${corpo}\n\nO PDF do pedido foi baixado pelo aplicativo para ser anexado nesta mensagem.`)}`;
+  abrirLinkExterno(mailto);
+  return true;
+}
+function abrirRastreioPedido(vendaId) {
+  const venda = (db.vendas || []).find(v => v.id === vendaId || v.pedidoId === vendaId);
+  if(!venda) return false;
+  const cliente = getCliente(venda.clienteId) || {};
+  qs("rastreioVendaId").value = venda.id;
+  qs("rastreioCodigo").value = venda.codigoRastreio || "";
+  qs("rastreioPedidoResumo").innerText = `${cliente.nomeCompleto || "Cliente"}${cliente.email ? ` · ${cliente.email}` : ""}${cliente.telefone ? ` · ${cliente.telefone}` : ""}`;
+  abrirModal("modalRastreioPedido");
+  setTimeout(() => qs("rastreioCodigo")?.focus(), 80);
+  return true;
+}
+function salvarRastreioPedido() {
+  const venda = (db.vendas || []).find(v => v.id === qs("rastreioVendaId")?.value);
+  const codigo = String(qs("rastreioCodigo")?.value || "").trim().toUpperCase();
+  if(!venda) return;
+  if(codigo.length < 6) return alert("Informe um código de rastreio válido.");
+  venda.codigoRastreio = codigo;
+  venda.dataRastreio = agoraServidor();
+  venda.statusPedido = "enviado";
+  tocarRegistro(venda);
+  registrarAuditoria("Código de rastreio salvo", `${venda.pedidoId || venda.id} · ${codigo}`);
+  salvarBanco();
+  fecharModal("modalRastreioPedido");
+  renderTudo();
+  renderPedidosClientes();
+  renderAcompanhamento();
+  const cliente = getCliente(venda.clienteId) || {};
+  const mensagem = montarMensagemRastreio(venda);
+  const telefone = normalizarTelefoneWhatsapp(cliente.telefone || "");
+  let abriu = false;
+  if(telefone) abriu = abrirLinkExterno(`https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`) || abriu;
+  if(cliente.email) abriu = abrirLinkExterno(`mailto:${encodeURIComponent(cliente.email)}?subject=${encodeURIComponent(`Rastreio do pedido ${venda.pedidoId || venda.id}`)}&body=${encodeURIComponent(mensagem)}`) || abriu;
+  if(!abriu) alert("Código salvo. Cadastre telefone e/ou e-mail do cliente para abrir as mensagens automaticamente.");
 }
 function renderClientes() {
   const q = (qs("buscaCliente")?.value || "").toLowerCase();
@@ -961,10 +1075,10 @@ function renderClientes() {
   if(filtroClientes === "vip") lista = lista.filter(c => c.vip);
   const ranking = new Map(lista.map(c => [c.id, getResumoCliente(c.id)]));
   lista.sort((a,b) => filtroClientes === "mais_compram" ? (ranking.get(b.id).total - ranking.get(a.id).total || ranking.get(b.id).unidades - ranking.get(a.id).unidades || String(a.nomeCompleto).localeCompare(String(b.nomeCompleto))) : String(a.nomeCompleto).localeCompare(String(b.nomeCompleto)));
-  if(q) lista = lista.filter(c => [c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.enderecoEntrega, c.observacao].join(" ").toLowerCase().includes(q));
+  if(q) lista = lista.filter(c => [c.nomeCompleto, c.cpf, c.email, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.enderecoEntrega, c.observacao].join(" ").toLowerCase().includes(q));
   qs("listaClientes").innerHTML = lista.length ? lista.map(c => `
     <div class="client-card ${c.vip ? "client-vip" : ""}" data-vip="${c.vip ? "true" : "false"}" role="button" tabindex="0" onclick="abrirDetalheCliente('${escapeHTML(c.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); abrirDetalheCliente('${escapeHTML(c.id)}'); }">
-      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${escapeHTML(enderecoClienteParaExibicao(c))}</small></div>
+      <div><strong>${escapeHTML(c.nomeCompleto)}</strong><small>${escapeHTML(c.telefone || "sem telefone")}${c.email ? ` · ${escapeHTML(c.email)}` : ""} · ${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - "))}</small><small>${c.cpf ? `CPF ${escapeHTML(c.cpf)} · ` : ""}${escapeHTML(enderecoClienteParaExibicao(c))}</small></div>
       <div class="client-actions"><button onclick="event.stopPropagation(); abrirFormularioCliente('${escapeHTML(c.id)}')">Editar</button><button onclick="event.stopPropagation(); excluirCliente('${escapeHTML(c.id)}')">Excluir</button></div>
     </div>`).join("") : `<div class="empty-state" style="height:180px"><div>👥</div><strong>Nenhum cliente</strong></div>`;
   if(lista.length) lista.forEach((c, index) => {
@@ -1007,7 +1121,9 @@ function abrirFormularioCliente(id = "", contexto = "") {
     const c = getCliente(id); if(!c) return;
     qs("tituloClienteForm").innerText = "Editar cliente";
     qs("clienteNome").value = c.nomeCompleto || "";
+    qs("clienteCPF").value = c.cpf || "";
     qs("clienteTelefone").value = c.telefone || "";
+    qs("clienteEmail").value = c.email || "";
     qs("clienteCEP").value = c.cep || "";
     qs("clienteRua").value = c.rua || c.enderecoEntrega || "";
     qs("clienteNumero").value = c.numero || "";
@@ -1018,7 +1134,7 @@ function abrirFormularioCliente(id = "", contexto = "") {
     qs("clientePontoReferencia").value = c.pontoReferencia || "";
   } else {
     qs("tituloClienteForm").innerText = "Cadastrar cliente";
-    ["clienteNome","clienteTelefone","clienteCEP","clienteRua","clienteNumero","clienteBairro","clienteComplemento","clientePontoReferencia"].forEach(idCampo => { qs(idCampo).value = ""; });
+    ["clienteNome","clienteCPF","clienteTelefone","clienteEmail","clienteCEP","clienteRua","clienteNumero","clienteBairro","clienteComplemento","clientePontoReferencia"].forEach(idCampo => { qs(idCampo).value = ""; });
     qs("clienteCidade").value = db.loja?.cidade || "";
     preencherUFSelect("clienteUF", db.loja?.uf || "PB");
   }
@@ -1034,7 +1150,9 @@ function salvarClienteForm() {
   if(!c) { c = { id: gerarIdLocal("cli"), dataCadastro: getHojeSTR() }; db.clientes.push(c); }
   Object.assign(c, {
     nomeCompleto: nome,
+    cpf: qs("clienteCPF").value.trim(),
     telefone: qs("clienteTelefone").value.trim(),
+    email: qs("clienteEmail").value.trim(),
     cep: qs("clienteCEP").value.trim(),
     rua: qs("clienteRua").value.trim(),
     numero: qs("clienteNumero").value.trim(),
@@ -1067,6 +1185,8 @@ function abrirDetalheCliente(id) {
     <div class="client-detail-header"><div class="client-avatar">👤</div><div><h2>${escapeHTML(c.nomeCompleto)}</h2><p>${escapeHTML(c.telefone || "Sem telefone")}</p></div></div>
     <div class="client-vip-actions"><span class="vip-badge ${c.vip ? "active" : "muted"}">${c.vip ? "★ Cliente VIP" : "☆ Marcar como VIP"}</span><button class="btn-outline small" onclick="alternarVipCliente('${escapeHTML(c.id)}')">${c.vip ? "Remover VIP" : "Marcar VIP"}</button></div>
     <div class="detail-grid client-detail-grid">
+      <div class="detail-box"><small>CPF</small><strong>${escapeHTML(c.cpf || "-")}</strong></div>
+      <div class="detail-box"><small>E-mail</small><strong>${escapeHTML(c.email || "-")}</strong></div>
       <div class="detail-box"><small>CEP</small><strong>${escapeHTML(c.cep || "-")}</strong></div>
       <div class="detail-box"><small>Cidade / UF</small><strong>${escapeHTML([c.cidade,c.uf].filter(Boolean).join(" - ") || "-")}</strong></div>
       <div class="detail-box"><small>Cadastro</small><strong>${escapeHTML(formatDataBR(c.dataCadastro) || "-")}</strong></div>
@@ -1125,6 +1245,7 @@ function abrirVenda(joiaId) {
   qs("vendaForma").value = "";
   if(qs("vendaFrete")) qs("vendaFrete").value = "";
   if(qs("vendaModalidadeEnvio")) qs("vendaModalidadeEnvio").value = "pac";
+  if(qs("vendaStatusPedido")) qs("vendaStatusPedido").value = "pronto_para_envio";
   qs("vendaObs").value = "";
   preencherSelectVendedores("");
   atualizarTotalVenda();
@@ -1153,7 +1274,7 @@ function salvarVenda() {
   const subtotal = Math.max(0, parseMoeda(qs("vendaValor").value));
   const valorFrete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
   const modalidadeEnvio = qs("vendaModalidadeEnvio")?.value || "pac";
-  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, modalidadeEnvio, formaPagamento: qs("vendaForma").value, obs: qs("vendaObs").value.trim() };
+  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido: qs("vendaStatusPedido")?.value || "pronto_para_envio", codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
   tocarRegistro(venda);
   db.vendas.push(venda);
   joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
@@ -1233,33 +1354,150 @@ function montarLinhasPedidoPDF(venda) {
   linhas.forEach(linha => { if(!linha) saida.push(""); else saida.push(...quebrarTextoPedido(linha)); });
   return saida;
 }
-function montarConteudoPDFPedido(linhas) {
+function pdfRgb(cor = "#000000") {
+  const hex = String(cor).replace("#", "");
+  const r = parseInt(hex.slice(0,2),16) || 0, g = parseInt(hex.slice(2,4),16) || 0, b = parseInt(hex.slice(4,6),16) || 0;
+  return `${(r/255).toFixed(3)} ${(g/255).toFixed(3)} ${(b/255).toFixed(3)}`;
+}
+function pdfRetangulo(x, y, w, h, preenchimento = null, borda = null, espessura = 0.6) {
+  const partes = ["q"];
+  if(preenchimento) partes.push(`${pdfRgb(preenchimento)} rg`);
+  if(borda) partes.push(`${pdfRgb(borda)} RG ${espessura} w`);
+  partes.push(`${x} ${y} ${w} ${h} re`, preenchimento && borda ? "B" : preenchimento ? "f" : "S", "Q");
+  return partes.join(" ");
+}
+function pdfTexto(texto, x, y, tamanho = 10, cor = "#241A12", negrito = false) {
+  return `${negrito ? "/F2" : "/F1"} ${tamanho} Tf ${pdfRgb(cor)} rg 1 0 0 1 ${x} ${y} Tm (${escaparTextoPDF(texto)}) Tj`;
+}
+function pdfValor(valor, vazio = "____________________________") { return String(valor || vazio); }
+function pdfCortar(valor, limite = 62) { const texto = textoPDFSeguro(valor || ""); return texto.length > limite ? `${texto.slice(0, Math.max(0, limite - 3))}...` : texto; }
+function base64ParaBytes(valor) {
+  try {
+    const binario = atob(valor);
+    const bytes = new Uint8Array(binario.length);
+    for(let i = 0; i < binario.length; i++) bytes[i] = binario.charCodeAt(i) & 255;
+    return bytes;
+  } catch(e) { return null; }
+}
+function dimensoesJPEG(bytes) {
+  if(!bytes || bytes.length < 10 || bytes[0] !== 0xFF || bytes[1] !== 0xD8) return null;
+  let pos = 2;
+  while(pos + 9 < bytes.length) {
+    if(bytes[pos] !== 0xFF) { pos += 1; continue; }
+    while(bytes[pos] === 0xFF) pos += 1;
+    const marcador = bytes[pos++];
+    if(marcador === 0xD8 || marcador === 0xD9) continue;
+    if(pos + 1 >= bytes.length) break;
+    const tamanho = (bytes[pos] << 8) + bytes[pos + 1];
+    if([0xC0,0xC1,0xC2,0xC3,0xC5,0xC6,0xC7,0xC9,0xCA,0xCB,0xCD,0xCE,0xCF].includes(marcador) && pos + 7 < bytes.length) return { width: (bytes[pos + 5] << 8) + bytes[pos + 6], height: (bytes[pos + 3] << 8) + bytes[pos + 4] };
+    pos += Math.max(2, tamanho);
+  }
+  return null;
+}
+function extrairLogoPDF(dataUrl) {
+  const match = /^data:image\/(?:jpe?g);base64,(.+)$/i.exec(String(dataUrl || ""));
+  if(!match) return null;
+  const bytes = base64ParaBytes(match[1]);
+  const dimensoes = dimensoesJPEG(bytes);
+  return bytes && dimensoes ? { bytes, width: dimensoes.width, height: dimensoes.height } : null;
+}
+function bytesParaString(bytes) { let texto = ""; for(let i = 0; i < bytes.length; i++) texto += String.fromCharCode(bytes[i]); return texto; }
+function montarConteudoFormularioPedidoPDF(venda, loja = {}, temLogo = false) {
+  const cliente = getCliente(venda.clienteId) || {};
+  const joia = getJoia(venda.joiaId) || {};
+  const categoria = getCategoria(joia.categoria);
+  const out = [];
+  const x = 40, largura = 515;
+  out.push(pdfRetangulo(0, 0, 595, 842, "#FBF7F0"));
+  out.push(pdfRetangulo(28, 28, 539, 786, "#FFFFFF", "#E4D5C2", 1));
+  out.push(pdfRetangulo(28, 758, 539, 56, "#EFE1CF", "#D6B98C", 0.8));
+  if(temLogo) {
+    const logo = extrairLogoPDF(loja.logo);
+    if(logo) {
+      const escala = Math.min(54 / logo.width, 48 / logo.height);
+      const w = Math.max(1, Math.round(logo.width * escala)), h = Math.max(1, Math.round(logo.height * escala));
+      out.push(`q ${w} 0 0 ${h} 43 ${762 + (48 - h) / 2} cm /Im1 Do Q`);
+    }
+  } else out.push(pdfTexto("◆", 48, 780, 26, "#B8860B", true));
+  out.push(pdfTexto(loja.nome || "JoiasPro", 116, 791, 18, "#52320E", true));
+  out.push(pdfTexto("FORMULÁRIO DE PEDIDO", 116, 772, 10, "#8A6840", true));
+  out.push(pdfTexto([loja.telefone, loja.cidade, loja.uf].filter(Boolean).join(" · "), 365, 781, 8, "#746B60", false));
+  let y = 742;
+  const secao = titulo => { out.push(pdfRetangulo(x, y, largura, 21, "#DCC7AA", "#D1B58E", 0.5)); out.push(pdfTexto(titulo, x + 8, y + 6, 9, "#52320E", true)); y -= 28; };
+  const linha = (campos, altura = 24) => {
+    const espaco = 4, colunas = campos.length, colW = (largura - espaco * (colunas - 1)) / colunas;
+    campos.forEach((campo, idx) => {
+      const cx = x + idx * (colW + espaco), labelW = Math.min(142, Math.max(74, colW * .36));
+      out.push(pdfRetangulo(cx, y, labelW, altura, "#F2E9DD", "#DCCDBB", 0.45));
+      out.push(pdfRetangulo(cx + labelW, y, colW - labelW, altura, "#FFFFFF", "#DCCDBB", 0.45));
+      out.push(pdfTexto(pdfCortar(campo.label, 24), cx + 6, y + altura - 14, campo.label.length > 16 ? 6.2 : 7.2, "#746B60", true));
+      const valor = pdfCortar(campo.value ? campo.value : "____________________", 44);
+      out.push(pdfTexto(valor, cx + labelW + 6, y + altura - 14, 8.2, "#241A12", false));
+    });
+    y -= altura;
+  };
+  secao("DADOS DO CLIENTE");
+  linha([{label:"NOME COMPLETO", value:cliente.nomeCompleto}, {label:"CPF", value:cliente.cpf}]);
+  linha([{label:"TELEFONE", value:cliente.telefone}, {label:"E-MAIL", value:cliente.email}]);
+  linha([{label:"CEP", value:cliente.cep}, {label:"RUA", value:cliente.rua}]);
+  linha([{label:"NÚMERO", value:cliente.numero}, {label:"BAIRRO", value:cliente.bairro}]);
+  linha([{label:"CIDADE", value:cliente.cidade}, {label:"UF", value:cliente.uf}]);
+  linha([{label:"COMPLEMENTO", value:cliente.complemento}, {label:"PONTO DE REFERÊNCIA", value:cliente.pontoReferencia}]);
+  secao("DADOS DO PEDIDO");
+  linha([{label:"PEDIDO Nº", value:venda.pedidoId || venda.id}, {label:"DATA", value:formatDataBR(venda.data) || getHojeSTR()}]);
+  linha([{label:"VENDEDORA", value:venda.vendedorNome}, {label:"STATUS", value:getStatusPedidoLabel(venda.statusPedido)}]);
+  linha([{label:"PEÇA / DESCRIÇÃO", value:joia.descricao || categoria.nome}, {label:"REFERÊNCIA", value:joia.referencia}]);
+  linha([{label:"CATEGORIA", value:categoria.nome}, {label:"QUANTIDADE", value:Math.max(1, Number(venda.quantidade || 1))}]);
+  const obs = pdfCortar(venda.obs || "", 95);
+  linha([{label:"OBSERVAÇÃO", value:obs}], 30);
+  secao("PAGAMENTO E ENVIO");
+  linha([{label:"SUBTOTAL", value:formatMoeda(venda.valorVenda)}, {label:"FRETE", value:formatMoeda(getValorFrete(venda))}]);
+  linha([{label:"VALOR TOTAL", value:formatMoeda(getValorTotalPedido(venda))}, {label:"PAGAMENTO", value:getFormaPagamentoLabel(venda.formaPagamento)}]);
+  linha([{label:"MODALIDADE", value:getModalidadeEnvioLabel(venda.modalidadeEnvio)}, {label:"RASTREIO", value:venda.codigoRastreio}]);
+  out.push(pdfRetangulo(x, 53, largura, 34, "#EFE1CF", "#D6B98C", 0.6));
+  out.push(pdfTexto("Obrigada por sua compra! Produto em ouro 18K.", x + 12, 72, 9, "#52320E", true));
+  out.push(pdfTexto("Logo mais enviaremos o código de rastreio para acompanhar seu pedido.", x + 12, 59, 8, "#746B60", false));
+  return textoPDFSeguro(out.join("\n"));
+}
+function montarConteudoPDFPedido(linhas, venda = null, loja = {}, temLogo = false) {
+  if(venda) return montarConteudoFormularioPedidoPDF(venda, loja, temLogo);
   const out = ["BT", "/F1 11 Tf"];
   let y = 790;
-  linhas.forEach((linha, index) => {
-    if(index === 0) out.push("/F1 16 Tf");
-    else if([3, 9, 16].includes(index)) out.push("/F1 12 Tf");
+  (linhas || []).forEach((linha, index) => {
+    if(index === 0) out.push("/F2 16 Tf");
+    else if([3, 9, 16].includes(index)) out.push("/F2 12 Tf");
     if(linha) out.push(`1 0 0 1 50 ${y} Tm (${escaparTextoPDF(linha)}) Tj`);
     y -= linha ? 17 : 10;
   });
   out.push("ET");
   return textoPDFSeguro(out.join("\n"));
 }
-function criarBytesPDFPedido(linhas) {
+function criarBytesPDFPedido(linhasOuVenda, opcoes = {}) {
+  const venda = Array.isArray(linhasOuVenda) ? (opcoes.venda || null) : linhasOuVenda;
+  const linhas = Array.isArray(linhasOuVenda) ? linhasOuVenda : [];
+  const loja = opcoes.loja || (typeof db !== "undefined" ? db.loja : {}) || {};
+  const logo = venda ? extrairLogoPDF(loja.logo) : null;
+  const paginas = venda ? [null] : [];
   const limiteLinhasPagina = 43;
-  const paginas = [];
-  for(let i = 0; i < linhas.length; i += limiteLinhasPagina) paginas.push(linhas.slice(i, i + limiteLinhasPagina));
+  if(!venda) for(let i = 0; i < linhas.length; i += limiteLinhasPagina) paginas.push(linhas.slice(i, i + limiteLinhasPagina));
   if(!paginas.length) paginas.push([""]);
   const objetos = [];
   objetos[1] = "<< /Type /Catalog /Pages 2 0 R >>";
   objetos[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objetos[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+  let proximoObjeto = 5;
+  if(logo) {
+    objetos[5] = `<< /Type /XObject /Subtype /Image /Width ${logo.width} /Height ${logo.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${logo.bytes.length} >>\nstream\n${bytesParaString(logo.bytes)}\nendstream`;
+    proximoObjeto = 6;
+  }
   const pageRefs = [];
   paginas.forEach((pagina, idx) => {
-    const pageObj = 4 + idx * 2;
+    const pageObj = proximoObjeto + idx * 2;
     const contentObj = pageObj + 1;
     pageRefs.push(`${pageObj} 0 R`);
-    const conteudo = montarConteudoPDFPedido(pagina);
-    objetos[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObj} 0 R >>`;
+    const recursosImagem = logo ? " /XObject << /Im1 5 0 R >>" : "";
+    const conteudo = venda ? montarConteudoPDFPedido(null, venda, loja, !!logo) : montarConteudoPDFPedido(pagina);
+    objetos[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${recursosImagem} >> /Contents ${contentObj} 0 R >>`;
     objetos[contentObj] = `<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`;
   });
   objetos[2] = `<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${paginas.length} >>`;
@@ -1268,7 +1506,7 @@ function criarBytesPDFPedido(linhas) {
   for(let i = 1; i < objetos.length; i++) {
     if(!objetos[i]) continue;
     offsets[i] = pdf.length;
-    pdf += `${i} 0 obj\n${textoPDFSeguro(objetos[i])}\nendobj\n`;
+    pdf += `${i} 0 obj\n${i === 5 && logo ? objetos[i] : textoPDFSeguro(objetos[i])}\nendobj\n`;
   }
   const xrefOffset = pdf.length;
   pdf += `xref\n0 ${objetos.length}\n0000000000 65535 f \n`;
@@ -1282,7 +1520,7 @@ function gerarPDFPedido(vendaId) {
   const venda = (db.vendas || []).find(v => v.id === vendaId || v.pedidoId === vendaId);
   if(!venda) return false;
   try {
-    const bytes = criarBytesPDFPedido(montarLinhasPedidoPDF(venda));
+    const bytes = criarBytesPDFPedido(venda, { loja: db.loja });
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const cliente = getCliente(venda.clienteId);
@@ -1523,8 +1761,152 @@ function renderPainelVendedora() {
       <div><small>Ticket médio</small><strong>${formatMoeda(vendas.length ? receita / vendas.length : 0)}</strong><em>dados do seu perfil</em></div>
     </div>
     <div class="section-title">Vendas de ${escapeHTML(labelMesCurto(mesRef))}</div>
-    ${vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}${v.obs ? ` · ${escapeHTML(v.obs)}` : ""}</p></div>`; }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
+    ${vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${formatDataBR(v.data)} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getStatusPedidoLabel(v.statusPedido))} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${getValorFrete(v) ? ` · frete ${formatMoeda(getValorFrete(v))}` : ""}${v.codigoRastreio ? ` · ${escapeHTML(v.codigoRastreio)}` : ""}${v.obs ? ` · ${escapeHTML(v.obs)}` : ""}</p></div>`; }).join("") || `<p class="hint">Nenhuma venda registrada neste mês.</p>`}
   `;
+}
+
+function abrirPainelVendasVendedoras() {
+  if(!exigirAdministrador()) return;
+  const mes = qs("mesVendasVendedoras");
+  if(mes && !mes.value) mes.value = getMesAtualSTR();
+  const select = qs("filtroVendedoraAdmin");
+  if(select) {
+    const atual = select.value;
+    select.innerHTML = '<option value="">Todas as vendedoras</option>' + getPerfisAdminDisponiveis().filter(p => ehVendedora(p)).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.nome)}</option>`).join("");
+    select.value = atual || "";
+  }
+  renderPainelVendasVendedoras();
+  abrirModal("modalVendasVendedoras");
+}
+function renderPainelVendasVendedoras() {
+  if(!ehAdministrador()) return;
+  const mes = qs("mesVendasVendedoras")?.value || getMesAtualSTR();
+  const vendedorId = qs("filtroVendedoraAdmin")?.value || "";
+  let vendas = (db.vendas || []).filter(v => String(v.data || "").slice(0,7) === mes && (v.vendedorId || v.vendedorNome));
+  if(vendedorId) { const perfil = getPerfisAdminDisponiveis().find(p => p.id === vendedorId); vendas = vendas.filter(v => v.vendedorId === vendedorId || (!v.vendedorId && perfil && String(v.vendedorNome || "").trim().toLowerCase() === String(perfil.nome || "").trim().toLowerCase())); }
+  vendas.sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  const receita = vendas.reduce((s,v) => s + getValorTotalPedido(v), 0);
+  const unidades = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
+  const nomeVendedora = vendedorId ? (getPerfisAdminDisponiveis().find(p => p.id === vendedorId)?.nome || "Vendedora") : "Todas as vendedoras";
+  qs("resumoVendasVendedoras").innerHTML = `<div class="report-month-title">${escapeHTML(nomeVendedora)} · ${escapeHTML(nomeMesLongo(mes))}</div><div class="report-hero report-hero-3 seller-report-hero"><div><small>Faturamento</small><strong>${formatMoeda(receita)}</strong><em>${vendas.length} venda(s)</em></div><div><small>Peças vendidas</small><strong>${unidades}</strong><em>no mês selecionado</em></div><div><small>Vendedoras com vendas</small><strong>${new Set(vendas.map(v => v.vendedorId || v.vendedorNome)).size}</strong><em>dados completos do administrador</em></div></div>`;
+  qs("listaVendasVendedoras").innerHTML = vendas.length ? vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data))} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(v.vendedorNome || "Vendedora não informada")} · ${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getStatusPedidoLabel(v.statusPedido))} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${v.codigoRastreio ? ` · ${escapeHTML(v.codigoRastreio)}` : ""}</p></div>`; }).join("") : `<div class="empty-state" style="height:180px"><div>📈</div><strong>Nenhuma venda encontrada</strong><p>Escolha outro mês ou vendedora.</p></div>`;
+}
+
+let abaAcompanhamentoAtual = "espera";
+function abrirAcompanhamento(tab = "espera") {
+  if(!adminLogado) return abrirLoginAdmin(false);
+  trocarAbaAcompanhamento(tab);
+  abrirModal("modalAcompanhamento");
+}
+function trocarAbaAcompanhamento(tab = "espera") {
+  abaAcompanhamentoAtual = ["espera","fabricacao","anotacoes"].includes(tab) ? tab : "espera";
+  qsa("[data-acomp-tab]").forEach(btn => btn.classList.toggle("active", btn.dataset.acompTab === abaAcompanhamentoAtual));
+  ["espera","fabricacao","anotacoes"].forEach(nome => { const painel = qs(`acompPainel${nome.charAt(0).toUpperCase()}${nome.slice(1)}`); if(painel) painel.style.display = nome === abaAcompanhamentoAtual ? "block" : "none"; });
+  renderAcompanhamento();
+}
+function renderAcompanhamento() {
+  renderListaEspera();
+  renderFabricacao();
+  renderAnotacoes();
+}
+function renderListaEspera() {
+  const lista = [...(db.listaEspera || [])].filter(item => item.status !== "concluida").sort((a,b) => String(a.dataPrevista || "9999").localeCompare(String(b.dataPrevista || "9999")) || String(b.updatedAt || 0).localeCompare(String(a.updatedAt || 0)));
+  qs("listaEsperaConteudo").innerHTML = lista.length ? lista.map(item => {
+    const cliente = getCliente(item.clienteId);
+    return `<div class="followup-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || item.clienteNome || "Cliente sem cadastro")}</strong><small>${escapeHTML(item.descricao || "Peça não informada")}${item.dataPrevista ? ` · previsão ${escapeHTML(formatDataBR(item.dataPrevista))}` : ""}</small><p>${escapeHTML(item.observacao || "Sem observações")}</p></div><div class="client-actions"><button onclick="abrirFormularioListaEspera('${escapeHTML(item.id)}')">Editar</button><button onclick="excluirListaEspera('${escapeHTML(item.id)}')">Excluir</button></div></div>`;
+  }).join("") : `<div class="empty-state compact-empty"><div>⏳</div><strong>Nenhum cliente na lista de espera</strong><p>Adicione um interesse para acompanhar.</p></div>`;
+}
+function abrirFormularioListaEspera(id = "") {
+  preencherSelectClientes("listaEsperaCliente", "", true);
+  const item = id ? (db.listaEspera || []).find(x => x.id === id) : null;
+  qs("listaEsperaId").value = item?.id || "";
+  qs("tituloListaEsperaForm").innerText = item ? "Editar lista de espera" : "Lista de espera";
+  qs("listaEsperaCliente").value = item?.clienteId || "";
+  qs("listaEsperaDescricao").value = item?.descricao || "";
+  qs("listaEsperaData").value = item?.dataPrevista || "";
+  qs("listaEsperaObservacao").value = item?.observacao || "";
+  abrirModal("modalListaEsperaForm");
+}
+function salvarListaEspera() {
+  const descricao = qs("listaEsperaDescricao").value.trim();
+  if(!descricao) return alert("Informe qual peça o cliente está aguardando.");
+  const id = qs("listaEsperaId").value;
+  let item = id ? (db.listaEspera || []).find(x => x.id === id) : null;
+  if(!item) { item = { id: gerarIdLocal("espera"), createdAt: agoraServidor() }; db.listaEspera.push(item); }
+  const cliente = getCliente(qs("listaEsperaCliente").value);
+  Object.assign(item, { clienteId: cliente?.id || "", clienteNome: cliente?.nomeCompleto || "", descricao, dataPrevista: qs("listaEsperaData").value || "", observacao: qs("listaEsperaObservacao").value.trim(), status: "aguardando" });
+  tocarRegistro(item);
+  registrarAuditoria("Lista de espera atualizada", `${cliente?.nomeCompleto || "Cliente"} · ${descricao}`);
+  salvarBanco();
+  fecharModal("modalListaEsperaForm");
+  renderAcompanhamento();
+}
+function excluirListaEspera(id) {
+  const item = (db.listaEspera || []).find(x => x.id === id); if(!item) return;
+  if(!confirm("Remover este cliente da lista de espera?")) return;
+  registrarExclusao("listaEspera", id);
+  db.listaEspera = db.listaEspera.filter(x => x.id !== id);
+  salvarBanco();
+  renderAcompanhamento();
+}
+function renderFabricacao() {
+  const lista = [...(db.vendas || [])].filter(v => v.statusPedido === "aguardando_fabricacao").sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
+  qs("listaFabricacaoConteudo").innerHTML = lista.length ? lista.map(v => {
+    const cliente = getCliente(v.clienteId), joia = getJoia(v.joiaId);
+    return `<div class="followup-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia")} · pedido ${escapeHTML(v.pedidoId || v.id)} · ${escapeHTML(v.vendedorNome || "Loja")}</small><p>${escapeHTML(v.obs || "Aguardando a finalização da fabricação.")}</p></div><div class="followup-actions"><select onchange="atualizarStatusPedido('${escapeHTML(v.id)}', this.value)"><option value="aguardando_fabricacao" selected>Aguardando fabricação</option><option value="pronto_para_envio">Pronto para envio</option><option value="enviado">Enviado</option><option value="entregue">Entregue</option></select><button class="btn-outline small" onclick="abrirRastreioPedido('${escapeHTML(v.id)}')">Rastreio</button></div></div>`;
+  }).join("") : `<div class="empty-state compact-empty"><div>🏭</div><strong>Nenhum pedido em fabricação</strong><p>Ao registrar uma venda, escolha o status de fabricação.</p></div>`;
+}
+function atualizarStatusPedido(vendaId, status) {
+  const venda = (db.vendas || []).find(v => v.id === vendaId); if(!venda) return;
+  venda.statusPedido = status || "pronto_para_envio";
+  tocarRegistro(venda);
+  registrarAuditoria("Status do pedido atualizado", `${venda.pedidoId || venda.id} · ${getStatusPedidoLabel(venda.statusPedido)}`);
+  salvarBanco();
+  renderAcompanhamento();
+  renderPedidosClientes();
+}
+function renderAnotacoes() {
+  const lista = [...(db.anotacoes || [])].sort((a,b) => Number(a.concluida) - Number(b.concluida) || String(a.dataLembrete || "9999").localeCompare(String(b.dataLembrete || "9999")) || String(b.updatedAt || 0).localeCompare(String(a.updatedAt || 0)));
+  qs("listaAnotacoesConteudo").innerHTML = lista.length ? lista.map(item => `<div class="followup-card note-card ${item.concluida ? "note-done" : ""}"><div><strong>${escapeHTML(item.titulo)}</strong><small>${item.dataLembrete ? `Lembrete: ${escapeHTML(formatDataBR(item.dataLembrete))}` : "Sem data"} · prioridade ${escapeHTML(item.prioridade)}${item.usuarioNome ? ` · ${escapeHTML(item.usuarioNome)}` : ""}</small><p>${escapeHTML(item.texto)}</p></div><div class="followup-actions"><button class="btn-outline small" onclick="alternarAnotacao('${escapeHTML(item.id)}')">${item.concluida ? "Reabrir" : "Concluir"}</button><button class="btn-outline small" onclick="abrirFormularioAnotacao('${escapeHTML(item.id)}')">Editar</button><button class="btn-outline small" onclick="excluirAnotacao('${escapeHTML(item.id)}')">Excluir</button></div></div>`).join("") : `<div class="empty-state compact-empty"><div>📝</div><strong>Nenhuma anotação</strong><p>Crie um lembrete para a equipe.</p></div>`;
+}
+function abrirFormularioAnotacao(id = "") {
+  const item = id ? (db.anotacoes || []).find(x => x.id === id) : null;
+  qs("anotacaoId").value = item?.id || "";
+  qs("tituloAnotacaoForm").innerText = item ? "Editar anotação" : "Nova anotação";
+  qs("anotacaoTitulo").value = item?.titulo || "";
+  qs("anotacaoData").value = item?.dataLembrete || "";
+  qs("anotacaoPrioridade").value = item?.prioridade || "normal";
+  qs("anotacaoTexto").value = item?.texto || "";
+  abrirModal("modalAnotacaoForm");
+}
+function salvarAnotacao() {
+  const titulo = qs("anotacaoTitulo").value.trim();
+  const texto = qs("anotacaoTexto").value.trim();
+  if(!titulo || !texto) return alert("Informe um título e o texto da anotação.");
+  const id = qs("anotacaoId").value;
+  let item = id ? (db.anotacoes || []).find(x => x.id === id) : null;
+  if(!item) { item = { id: gerarIdLocal("anotacao"), createdAt: agoraServidor(), concluida: false }; db.anotacoes.push(item); }
+  Object.assign(item, { titulo, texto, dataLembrete: qs("anotacaoData").value || "", prioridade: qs("anotacaoPrioridade").value || "normal", usuarioId: adminLogado?.id || "", usuarioNome: adminLogado?.nome || "" });
+  tocarRegistro(item);
+  registrarAuditoria("Anotação salva", titulo);
+  salvarBanco();
+  fecharModal("modalAnotacaoForm");
+  renderAnotacoes();
+}
+function alternarAnotacao(id) {
+  const item = (db.anotacoes || []).find(x => x.id === id); if(!item) return;
+  item.concluida = !item.concluida;
+  tocarRegistro(item);
+  salvarBanco();
+  renderAnotacoes();
+}
+function excluirAnotacao(id) {
+  const item = (db.anotacoes || []).find(x => x.id === id); if(!item) return;
+  if(!confirm("Excluir esta anotação?")) return;
+  registrarExclusao("anotacoes", id);
+  db.anotacoes = db.anotacoes.filter(x => x.id !== id);
+  salvarBanco();
+  renderAnotacoes();
 }
 
 function getTemaSelecionado() {
@@ -1719,11 +2101,11 @@ function exportarCSV(tipo) {
     rows = [["referencia","descricao","categoria","status","quantidade_estoque","data_entrada","peso_ouro_g","preco_compra","preco_venda","cliente","data_cadastro","data_venda","observacoes"]];
     (db.joias || []).forEach(j => rows.push([j.referencia, j.descricao, getCategoria(j.categoria).nome, j.status, j.quantidadeEstoque || 0, j.dataEntrada || "", String(j.pesoOuro).replace(".",","), formatMoedaSem(j.precoCompra), formatMoedaSem(j.precoVenda), getCliente(j.clienteId)?.nomeCompleto || "", j.dataCadastro || "", j.dataVenda || "", j.obs || ""]));
   } else if(tipo === "clientes") {
-    rows = [["nome_completo","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","vip","observacao"]];
-    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.vip ? "sim" : "nao", c.observacao]));
+    rows = [["nome_completo","cpf","email","telefone","cep","rua","numero","bairro","cidade","uf","complemento","ponto_referencia","vip","observacao"]];
+    (db.clientes || []).forEach(c => rows.push([c.nomeCompleto, c.cpf, c.email, c.telefone, c.cep, c.rua, c.numero, c.bairro, c.cidade, c.uf, c.complemento, c.pontoReferencia, c.vip ? "sim" : "nao", c.observacao]));
   } else if(tipo === "vendas") {
-    rows = [["data","referencia","cliente","vendedor","quantidade","subtotal","frete","valor_total","forma_pagamento","modalidade_envio","observacao"]];
-    (db.vendas || []).forEach(v => rows.push([v.data, getJoia(v.joiaId)?.referencia || "", getCliente(v.clienteId)?.nomeCompleto || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), formatMoedaSem(getValorFrete(v)), formatMoedaSem(getValorTotalPedido(v)), getFormaPagamentoLabel(v.formaPagamento), getModalidadeEnvioLabel(v.modalidadeEnvio), v.obs || ""]));
+    rows = [["data","pedido","referencia","cliente","cpf","email","vendedor","quantidade","subtotal","frete","valor_total","forma_pagamento","modalidade_envio","status_pedido","codigo_rastreio","observacao"]];
+    (db.vendas || []).forEach(v => { const cliente = getCliente(v.clienteId) || {}; rows.push([v.data, v.pedidoId || v.id, getJoia(v.joiaId)?.referencia || "", cliente.nomeCompleto || "", cliente.cpf || "", cliente.email || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), formatMoedaSem(getValorFrete(v)), formatMoedaSem(getValorTotalPedido(v)), getFormaPagamentoLabel(v.formaPagamento), getModalidadeEnvioLabel(v.modalidadeEnvio), getStatusPedidoLabel(v.statusPedido), v.codigoRastreio || "", v.obs || ""]); });
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
@@ -1754,6 +2136,8 @@ function temMudancaLocalPendente() {
   if((db.joias || []).some(x => x._clientDirty)) return true;
   if((db.clientes || []).some(x => x._clientDirty)) return true;
   if((db.vendas || []).some(x => x._clientDirty)) return true;
+  if((db.listaEspera || []).some(x => x._clientDirty)) return true;
+  if((db.anotacoes || []).some(x => x._clientDirty)) return true;
   if((db.categorias || []).some(x => x._clientDirty)) return true;
   if((db.administradores || []).some(x => x._clientDirty)) return true;
   if((db.auditoria || []).some(x => x._clientDirty)) return true;
@@ -1770,7 +2154,7 @@ function objetoMaisNovo(a,b) {
   const tb = Number(b._serverUpdatedAt || b.updatedAt || b._clientChangedAt || 0);
   return tb >= ta ? b : a;
 }
-function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; if(old?._clientDirty && !bb[id]?._clientDirty) return; if(bb[id]?._clientDirty || tombstoneTempo(bb[id]) >= tombstoneTempo(old)) out[tipo][id] = bb[id]; }); }); return out; }
+function mesclarExclusoes(a,b) { const tipos = ["joias","clientes","vendas","listaEspera","anotacoes","categorias","administradores"]; const out = {}; tipos.forEach(tipo => { out[tipo] = {}; const aa = (a && a[tipo]) || {}, bb = (b && b[tipo]) || {}; Object.keys(aa).forEach(id => out[tipo][id] = aa[id]); Object.keys(bb).forEach(id => { const old = out[tipo][id]; if(old?._clientDirty && !bb[id]?._clientDirty) return; if(bb[id]?._clientDirty || tombstoneTempo(bb[id]) >= tombstoneTempo(old)) out[tipo][id] = bb[id]; }); }); return out; }
 function mesclarListaPorData(atual = [], nova = [], excluidos = {}) {
   const map = {};
   atual.concat(nova).forEach(item => {
@@ -1793,6 +2177,8 @@ function mesclarBancosPorData(local, nuvem) {
   merged.joias = mesclarListaPorData(local.joias, nuvem.joias, merged._deleted.joias);
   merged.clientes = mesclarListaPorData(local.clientes, nuvem.clientes, merged._deleted.clientes);
   merged.vendas = mesclarListaPorData(local.vendas, nuvem.vendas, merged._deleted.vendas);
+  merged.listaEspera = mesclarListaPorData(local.listaEspera, nuvem.listaEspera, merged._deleted.listaEspera);
+  merged.anotacoes = mesclarListaPorData(local.anotacoes, nuvem.anotacoes, merged._deleted.anotacoes);
   merged.administradores = mesclarListaPorData(local.administradores, nuvem.administradores, merged._deleted.administradores);
   merged.auditoria = filtrarAuditoriaRecente(mesclarListaPorData(local.auditoria, nuvem.auditoria, {}));
   merged.configs = { ...(local.configs || {}), ...(nuvem.configs || {}) };

@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=0.4">
+  <link rel="stylesheet" href="style.css?v=0.5">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback">◆</div>
     <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v0.4</div>
+    <div class="splash-version" id="splashVersao">v0.5</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -117,10 +117,12 @@
       <button class="menu-btn" onclick="abrirFormularioJoia(); fecharModal('modalPainelUnificado')">💍 Cadastrar joia</button>
       <button class="menu-btn" onclick="abrirClientes(); fecharModal('modalPainelUnificado')">👥 Clientes</button>
       <button class="menu-btn" onclick="abrirPedidosClientes(); fecharModal('modalPainelUnificado')">🧾 Pedidos dos clientes</button>
+      <button class="menu-btn" onclick="abrirAcompanhamento(); fecharModal('modalPainelUnificado')">📌 Acompanhamento e agenda</button>
       <button class="menu-btn somente-admin" id="btnDadosLoja" onclick="abrirDadosLoja(); fecharModal('modalPainelUnificado')">🏬 Dados da loja</button>
       <button class="menu-btn somente-admin" id="btnTemaVisual" onclick="abrirTemaVisual(); fecharModal('modalPainelUnificado')">🎨 Tema visual</button>
       <button class="menu-btn somente-admin" id="btnAuditoria" onclick="abrirAuditoria(); fecharModal('modalPainelUnificado')">📋 Auditoria</button>
       <button class="menu-btn danger somente-admin" id="btnAvancado" onclick="abrirAvancado(); fecharModal('modalPainelUnificado')">⚠️ Avançado</button>
+      <button class="menu-btn somente-admin" id="btnMenuVendasVendedoras" onclick="abrirPainelVendasVendedoras(); fecharModal('modalPainelUnificado')">📈 Vendas das vendedoras</button>
       <button class="menu-btn seller-menu" id="btnMenuPainelVendedora" onclick="abrirPainelVendedora(); fecharModal('modalPainelUnificado')" style="display:none">🧾 Minhas vendas do mês</button>
     </div>
   </div>
@@ -209,7 +211,11 @@
       <input type="hidden" id="clienteId">
       <div class="form-group"><label>Nome completo *</label><input type="text" id="clienteNome" autocomplete="name"></div>
       <div class="grid-2">
-        <div class="form-group"><label>Telefone</label><input type="tel" id="clienteTelefone" inputmode="tel" oninput="maskTelefone(this)"></div>
+        <div class="form-group"><label>CPF</label><input type="text" id="clienteCPF" inputmode="numeric" autocomplete="off" placeholder="000.000.000-00" oninput="maskCPF(this)"></div>
+        <div class="form-group"><label>Telefone / WhatsApp</label><input type="tel" id="clienteTelefone" inputmode="tel" oninput="maskTelefone(this)"></div>
+      </div>
+      <div class="grid-2">
+        <div class="form-group"><label>E-mail</label><input type="email" id="clienteEmail" autocomplete="email" placeholder="cliente@email.com"></div>
         <div class="form-group"><label>CEP</label><div class="inline-field"><input type="text" id="clienteCEP" inputmode="numeric" autocomplete="postal-code" placeholder="00000-000" oninput="maskCEP(this)" onblur="if(this.value.replace(/\D/g,'').length===8) buscarCepCliente()"><button type="button" class="btn-outline cep-btn" onclick="buscarCepCliente()">Buscar CEP</button></div></div>
       </div>
       <div class="grid-2">
@@ -257,6 +263,7 @@
         <div class="form-group"><label>Modalidade de envio</label><select id="vendaModalidadeEnvio"><option value="pac">PAC</option><option value="sedex">Sedex</option></select></div>
         <div class="sale-total-box"><small>Valor total do pedido</small><strong id="vendaTotalPedido">R$ 0,00</strong></div>
       </div>
+      <div class="form-group"><label>Status do pedido</label><select id="vendaStatusPedido"><option value="pronto_para_envio">Pronto para envio</option><option value="aguardando_fabricacao">Aguardando finalizar fabricação</option></select></div>
       <div class="form-group"><label>Observação</label><textarea id="vendaObs" rows="3"></textarea></div>
       <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalVenda')">Cancelar</button><button class="btn-action" onclick="salvarVenda()">Confirmar venda e gerar PDF</button></div>
     </div>
@@ -303,12 +310,81 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="modalVendasVendedoras" style="z-index:2050">
+    <div class="modal large-modal report-modal">
+      <div class="modal-title"><span>📈 Vendas das vendedoras</span><button class="icon-btn" onclick="fecharModal('modalVendasVendedoras')">✖</button></div>
+      <div class="panel-toolbar seller-admin-toolbar">
+        <div class="form-group panel-month-field"><label>Mês de consulta</label><input type="month" id="mesVendasVendedoras" onchange="renderPainelVendasVendedoras()"></div>
+        <div class="form-group seller-filter-field"><label>Vendedora</label><select id="filtroVendedoraAdmin" onchange="renderPainelVendasVendedoras()"></select></div>
+      </div>
+      <div id="resumoVendasVendedoras"></div>
+      <div id="listaVendasVendedoras" class="client-list"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="modalPedidosClientes" style="z-index:2050">
     <div class="modal large-modal">
       <div class="modal-title"><span>🧾 Pedidos dos clientes</span><button class="icon-btn" onclick="fecharModal('modalPedidosClientes')">✖</button></div>
       <div class="toolbar client-toolbar"><input type="search" id="buscaPedidoCliente" placeholder="Buscar cliente, referência ou vendedor..." oninput="renderPedidosClientes()"><input type="month" id="mesPedidosClientes" onchange="renderPedidosClientes()"></div>
       <p class="hint">O PDF inclui cliente, endereço completo, peça, total, frete, pagamento e modalidade de envio.</p>
       <div class="client-list" id="listaPedidosClientes"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalAcompanhamento" style="z-index:2050">
+    <div class="modal large-modal">
+      <div class="modal-title"><span>📌 Acompanhamento</span><button class="icon-btn" onclick="fecharModal('modalAcompanhamento')">✖</button></div>
+      <div class="acomp-tabs" role="tablist">
+        <button type="button" class="chip active" data-acomp-tab="espera" onclick="trocarAbaAcompanhamento('espera')">Lista de espera</button>
+        <button type="button" class="chip" data-acomp-tab="fabricacao" onclick="trocarAbaAcompanhamento('fabricacao')">Em fabricação</button>
+        <button type="button" class="chip" data-acomp-tab="anotacoes" onclick="trocarAbaAcompanhamento('anotacoes')">Agenda / anotações</button>
+      </div>
+      <section id="acompPainelEspera" class="acomp-panel">
+        <div class="toolbar acomp-toolbar"><div><strong>Clientes aguardando uma peça chegar</strong><small>Registre o interesse para avisar quando houver novidade.</small></div><button class="btn-action compact" onclick="abrirFormularioListaEspera()">＋ Adicionar</button></div>
+        <div id="listaEsperaConteudo" class="client-list"></div>
+      </section>
+      <section id="acompPainelFabricacao" class="acomp-panel" style="display:none">
+        <div class="toolbar acomp-toolbar"><div><strong>Compras aguardando finalizar fabricação</strong><small>Atualize o status no pedido quando a peça ficar pronta.</small></div></div>
+        <div id="listaFabricacaoConteudo" class="client-list"></div>
+      </section>
+      <section id="acompPainelAnotacoes" class="acomp-panel" style="display:none">
+        <div class="toolbar acomp-toolbar"><div><strong>Agenda das vendedoras</strong><small>Anote lembretes, retornos e tarefas importantes.</small></div><button class="btn-action compact" onclick="abrirFormularioAnotacao()">＋ Anotação</button></div>
+        <div id="listaAnotacoesConteudo" class="client-list"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalListaEsperaForm" style="z-index:2250">
+    <div class="modal">
+      <div class="modal-title"><span id="tituloListaEsperaForm">Lista de espera</span><button class="icon-btn" onclick="fecharModal('modalListaEsperaForm')">✖</button></div>
+      <input type="hidden" id="listaEsperaId">
+      <div class="form-group"><label>Cliente</label><select id="listaEsperaCliente"></select></div>
+      <div class="form-group"><label>Peça desejada *</label><input type="text" id="listaEsperaDescricao" placeholder="Ex.: anel solitário tamanho 18"></div>
+      <div class="form-group"><label>Previsão de chegada</label><input type="date" id="listaEsperaData"></div>
+      <div class="form-group"><label>Observação</label><textarea id="listaEsperaObservacao" rows="3" placeholder="Cor, tamanho, faixa de preço..."></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalListaEsperaForm')">Cancelar</button><button class="btn-action" onclick="salvarListaEspera()">Salvar</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalAnotacaoForm" style="z-index:2250">
+    <div class="modal">
+      <div class="modal-title"><span id="tituloAnotacaoForm">Nova anotação</span><button class="icon-btn" onclick="fecharModal('modalAnotacaoForm')">✖</button></div>
+      <input type="hidden" id="anotacaoId">
+      <div class="form-group"><label>Título *</label><input type="text" id="anotacaoTitulo" placeholder="Ex.: Retornar para Maria"></div>
+      <div class="grid-2"><div class="form-group"><label>Lembrete</label><input type="date" id="anotacaoData"></div><div class="form-group"><label>Prioridade</label><select id="anotacaoPrioridade"><option value="normal">Normal</option><option value="alta">Alta</option><option value="baixa">Baixa</option></select></div></div>
+      <div class="form-group"><label>Anotação *</label><textarea id="anotacaoTexto" rows="5" placeholder="Escreva o que deseja lembrar..."></textarea></div>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalAnotacaoForm')">Cancelar</button><button class="btn-action" onclick="salvarAnotacao()">Salvar</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalRastreioPedido" style="z-index:2300">
+    <div class="modal">
+      <div class="modal-title"><span>📦 Código de rastreio</span><button class="icon-btn" onclick="fecharModal('modalRastreioPedido')">✖</button></div>
+      <input type="hidden" id="rastreioVendaId">
+      <p class="hint" id="rastreioPedidoResumo"></p>
+      <div class="form-group"><label>Código dos Correios</label><input type="text" id="rastreioCodigo" placeholder="Ex.: AA123456789BR" autocomplete="off"></div>
+      <p class="hint">Ao salvar, o aplicativo abrirá uma mensagem pronta no WhatsApp e no e-mail do cliente.</p>
+      <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalRastreioPedido')">Cancelar</button><button class="btn-action" onclick="salvarRastreioPedido()">Salvar e avisar cliente</button></div>
     </div>
   </div>
 
@@ -419,6 +495,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=0.4" defer></script>
+  <script src="app.js?v=0.5" defer></script>
 </body>
 </html>

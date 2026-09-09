@@ -91,11 +91,13 @@ function criarBancoBase() {
     joias: [],
     clientes: [],
     vendas: [],
+    listaEspera: [],
+    anotacoes: [],
     administradores: [],
     auditoria: [],
     configGerais: { corTema: '#9B6A2F', corSubHeader: '#fff8ef' },
     configs: { url: '', dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: '1999', clientId: '' },
-    _deleted: { joias: {}, clientes: {}, vendas: {}, categorias: {}, administradores: {} }
+    _deleted: { joias: {}, clientes: {}, vendas: {}, listaEspera: {}, anotacoes: {}, categorias: {}, administradores: {} }
   };
 }
 
@@ -121,12 +123,14 @@ function normalizarBanco(dados) {
   dados.joias = Array.isArray(dados.joias) ? dados.joias : [];
   dados.clientes = Array.isArray(dados.clientes) ? dados.clientes : [];
   dados.vendas = Array.isArray(dados.vendas) ? dados.vendas : [];
+  dados.listaEspera = Array.isArray(dados.listaEspera) ? dados.listaEspera : [];
+  dados.anotacoes = Array.isArray(dados.anotacoes) ? dados.anotacoes : [];
   dados.administradores = Array.isArray(dados.administradores) ? dados.administradores : [];
   dados.auditoria = Array.isArray(dados.auditoria) ? dados.auditoria : [];
   dados.configGerais = Object.assign({}, base.configGerais, dados.configGerais || {});
   dados.configs = Object.assign({}, base.configs, dados.configs || {});
   dados._deleted = Object.assign({}, base._deleted, dados._deleted || {});
-  ['joias','clientes','vendas','categorias','administradores'].forEach(function(k) {
+  ['joias','clientes','vendas','listaEspera','anotacoes','categorias','administradores'].forEach(function(k) {
     dados._deleted[k] = dados._deleted[k] || {};
   });
 
@@ -136,6 +140,8 @@ function normalizarBanco(dados) {
 
   dados.clientes.forEach(function(c, idx) {
     if (!c.id) c.id = 'cli_' + idx;
+    c.cpf = c.cpf || '';
+    c.email = c.email || '';
     c.vip = !!c.vip;
   });
   dados.vendas.forEach(function(v, idx) {
@@ -146,8 +152,28 @@ function normalizarBanco(dados) {
     v.valorFrete = Math.max(0, Number(v.valorFrete != null ? v.valorFrete : v.frete) || 0);
     v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || '';
     v.pedidoId = v.pedidoId || v.id;
+    v.statusPedido = v.statusPedido || 'pronto_para_envio';
+    v.codigoRastreio = v.codigoRastreio || '';
+    v.dataRastreio = Number(v.dataRastreio || 0);
     var totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, 'valorTotalPedido') ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
+  });
+  dados.listaEspera.forEach(function(item, idx) {
+    if (!item.id) item.id = 'espera_' + idx;
+    item.clienteId = item.clienteId || '';
+    item.clienteNome = item.clienteNome || '';
+    item.descricao = item.descricao || item.peca || '';
+    item.dataPrevista = item.dataPrevista || '';
+    item.observacao = item.observacao || item.obs || '';
+    item.status = item.status || 'aguardando';
+  });
+  dados.anotacoes.forEach(function(item, idx) {
+    if (!item.id) item.id = 'anotacao_' + idx;
+    item.titulo = item.titulo || 'Anotação';
+    item.texto = item.texto || item.observacao || '';
+    item.dataLembrete = item.dataLembrete || '';
+    item.prioridade = item.prioridade || 'normal';
+    item.concluida = !!item.concluida;
   });
   dados.administradores.forEach(function(a, idx) {
     if (!a.id) a.id = 'adm_' + idx;
@@ -177,7 +203,7 @@ function limparFlagsCliente(db, revision, serverNow) {
 
   clearObj(db.loja);
   clearObj(db.configGerais);
-  ['categorias','joias','clientes','vendas','administradores','auditoria'].forEach(function(lista) {
+  ['categorias','joias','clientes','vendas','listaEspera','anotacoes','administradores','auditoria'].forEach(function(lista) {
     (db[lista] || []).forEach(clearObj);
   });
 
@@ -245,7 +271,7 @@ function mesclarJoiasNoServidor(atual, recebido) {
 }
 
 function mesclarExclusoesNoServidor(atual, recebido) {
-  const tipos = ['joias','clientes','vendas','categorias','administradores'];
+  const tipos = ['joias','clientes','vendas','listaEspera','anotacoes','categorias','administradores'];
   const out = {};
   tipos.forEach(function(tipo) {
     out[tipo] = {};
@@ -278,6 +304,8 @@ function mesclarBancosNoServidor(atual, recebido) {
   merged.joias = removerExcluidos(mesclarJoiasNoServidor(atual.joias, recebido.joias), merged._deleted.joias);
   merged.clientes = removerExcluidos(mesclarListaNoServidor(atual.clientes, recebido.clientes), merged._deleted.clientes);
   merged.vendas = removerExcluidos(mesclarListaNoServidor(atual.vendas, recebido.vendas), merged._deleted.vendas);
+  merged.listaEspera = removerExcluidos(mesclarListaNoServidor(atual.listaEspera, recebido.listaEspera), merged._deleted.listaEspera);
+  merged.anotacoes = removerExcluidos(mesclarListaNoServidor(atual.anotacoes, recebido.anotacoes), merged._deleted.anotacoes);
   merged.administradores = removerExcluidos(mesclarListaNoServidor(atual.administradores, recebido.administradores), merged._deleted.administradores);
   merged.auditoria = mesclarListaNoServidor(atual.auditoria, recebido.auditoria);
   merged.configs = Object.assign({}, atual.configs || {}, recebido.configs || {});
@@ -299,7 +327,7 @@ function tombstoneTempo(valor) {
 }
 
 function mesclarExclusoes(a, b) {
-  const tipos = ['joias','clientes','vendas','categorias','administradores'];
+  const tipos = ['joias','clientes','vendas','listaEspera','anotacoes','categorias','administradores'];
   const out = {};
   tipos.forEach(function(tipo) {
     out[tipo] = {};
@@ -341,6 +369,8 @@ function mesclarBancosPorData(atual, recebido) {
   merged.joias = mesclarListaPorData(atual.joias, recebido.joias, merged._deleted.joias);
   merged.clientes = mesclarListaPorData(atual.clientes, recebido.clientes, merged._deleted.clientes);
   merged.vendas = mesclarListaPorData(atual.vendas, recebido.vendas, merged._deleted.vendas);
+  merged.listaEspera = mesclarListaPorData(atual.listaEspera, recebido.listaEspera, merged._deleted.listaEspera);
+  merged.anotacoes = mesclarListaPorData(atual.anotacoes, recebido.anotacoes, merged._deleted.anotacoes);
   merged.administradores = mesclarListaPorData(atual.administradores, recebido.administradores, merged._deleted.administradores);
   merged.auditoria = mesclarListaPorData(atual.auditoria, recebido.auditoria, {});
   merged.configs = Object.assign({}, atual.configs || {}, recebido.configs || {});

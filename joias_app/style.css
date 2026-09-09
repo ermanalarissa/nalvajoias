@@ -536,3 +536,36 @@ body {
   .order-card .btn-outline { width:100%; }
   .sale-total-box { margin-bottom: 12px; }
 }
+
+/* Versão 5: acompanhamento, agenda e formulário de pedido. */
+.order-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+.order-actions .btn-outline { min-width:58px; }
+.acomp-tabs { display:flex; gap:7px; overflow-x:auto; padding:4px 0 12px; border-bottom:1px solid var(--line); }
+.acomp-tabs .chip { flex:0 0 auto; }
+.acomp-panel { padding-top:4px; }
+.acomp-toolbar { justify-content:space-between; align-items:center; background:linear-gradient(145deg,#fff,var(--theme-sub)); border:1px solid var(--line); border-radius:16px; padding:10px 12px; }
+.acomp-toolbar strong, .acomp-toolbar small { display:block; }
+.acomp-toolbar strong { color:var(--ink); }
+.acomp-toolbar small { color:var(--muted); font-size:11px; font-weight:800; margin-top:3px; }
+.followup-card { display:flex; justify-content:space-between; align-items:center; gap:12px; border:1px solid var(--line); border-radius:16px; padding:12px; background:#fff; box-shadow:0 5px 14px rgba(60,37,12,.05); }
+.followup-card > div:first-child { min-width:0; }
+.followup-card strong, .followup-card small { display:block; }
+.followup-card small { color:var(--muted); font-weight:800; margin-top:4px; overflow-wrap:anywhere; }
+.followup-card p { margin:6px 0 0; color:var(--muted); font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+.followup-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; align-items:center; }
+.followup-actions select { border:1px solid var(--line); border-radius:10px; padding:8px; background:#fff; color:var(--ink); font-weight:800; }
+.note-card.note-done { opacity:.62; background:#faf8f5; }
+.note-card.note-done strong { text-decoration:line-through; }
+.compact-empty { height:180px; }
+.seller-filter-field { min-width:220px; margin:0; }
+.seller-admin-toolbar { grid-template-columns: minmax(190px,260px) minmax(220px,320px); }
+
+@media (max-width:560px) {
+  .order-actions { width:100%; justify-content:stretch; }
+  .order-actions .btn-outline { flex:1 1 30%; }
+  .followup-card { align-items:flex-start; flex-direction:column; }
+  .followup-actions { width:100%; justify-content:flex-start; }
+  .followup-actions .btn-outline, .followup-actions select { flex:1 1 auto; }
+  .seller-admin-toolbar { grid-template-columns:1fr; }
+  .seller-filter-field { min-width:0; }
+}
