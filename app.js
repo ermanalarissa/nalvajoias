@@ -1,4 +1,4 @@
-const APP_VERSION = "v0.6";
+const APP_VERSION = "v0.7";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 // A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
@@ -27,15 +27,8 @@ const TEMAS_PREDEFINIDOS = [
   { id: "safira", nome: "Safira", cor: "#1C3F75", sub: "#EEF4FF" }
 ];
 
-// Fotos reais usadas na capa do catálogo. Elas ficam no repositório para o
-// aplicativo carregar rapidamente, sem depender de um serviço externo.
-const CAPA_FOTOS = [
-  { src: "assets/capa/colar-ponto-luz.jpeg", titulo: "Brilho que fica", categoria: "Correntaria" },
-  { src: "assets/capa/pulseiras-ouro.jpeg", titulo: "Ouro em movimento", categoria: "Pulseiras" },
-  { src: "assets/capa/pulseira-elos.jpeg", titulo: "Clássicos para todos os dias", categoria: "Pulseiras" },
-  { src: "assets/capa/aneis-coracao.jpeg", titulo: "Peças para celebrar", categoria: "Anéis" },
-  { src: "assets/capa/brincos-argolas.jpeg", titulo: "Elegância nos detalhes", categoria: "Argolas" }
-];
+const LOGO_PADRAO_ASSET = "assets/nalva-logo.png";
+const LOGO_PADRAO_PDF_ASSET = "assets/nalva-logo-pdf.jpg";
 const CAPA_FOTO_CATEGORIA = {
   correntaria: "assets/capa/colar-ponto-luz.jpeg",
   pulseiras: "assets/capa/pulseiras-ouro.jpeg",
@@ -65,8 +58,6 @@ let syncPendente = false;
 let cepLookupInProgress = false;
 let renderPendenteSync = false;
 let filtroClientes = "todos";
-let capaFotoAtual = 0;
-let capaTimer = null;
 
 function qs(id) { return document.getElementById(id); }
 function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
@@ -186,7 +177,7 @@ function getVendedorAtual() {
 function preencherSelectVendedores(valor = "") {
   const select = qs("vendaVendedora");
   if(!select) return;
-  const vendedores = getPerfisAdminDisponiveis().filter(p => ehVendedora(p));
+  const vendedores = getVendedoresParaFiltro();
   select.innerHTML = '<option value="">Venda da loja/administrador</option>' + vendedores.map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.nome)}</option>`).join("");
   select.value = valor || "";
   select.closest(".form-group")?.style.setProperty("display", ehAdministrador() ? "" : "none");
@@ -313,6 +304,9 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || "";
     v.pedidoId = v.pedidoId || v.id;
     v.statusPedido = v.statusPedido || "pronto_para_envio";
+    v.quantidadePendenteFabricacao = Math.max(0, Math.floor(Number(v.quantidadePendenteFabricacao || 0)));
+    v.fabricacaoAutomatica = !!v.fabricacaoAutomatica;
+    v.origemFabricacao = v.origemFabricacao || "";
     v.codigoRastreio = v.codigoRastreio || "";
     v.dataRastreio = Number(v.dataRastreio || 0);
     v.custoUnitario = parseNumeroFlexivel(v.custoUnitario);
@@ -416,6 +410,18 @@ function getPerfisAdminDisponiveis() {
 
   if(perfis.length === 0) perfis.push({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), tipo: "admin", isAdmin: true, forcarTrocaSenha: false });
   return perfis;
+}
+
+function getVendedoresParaFiltro() {
+  const mapa = new Map();
+  getPerfisAdminDisponiveis().filter(p => ehVendedora(p)).forEach(p => mapa.set(String(p.id), { id: String(p.id), nome: p.nome }));
+  (db.vendas || []).forEach(v => {
+    const nome = String(v.vendedorNome || "").trim();
+    if(!nome && !v.vendedorId) return;
+    const id = String(v.vendedorId || `legacy_${normalizarTextoId(nome)}`);
+    if(!mapa.has(id)) mapa.set(id, { id, nome: nome || "Vendedora" });
+  });
+  return [...mapa.values()].sort((a,b) => String(a.nome).localeCompare(String(b.nome), "pt-BR"));
 }
 
 function renderOpcoesLoginAdmin(selectedId = "") {
@@ -560,28 +566,11 @@ function renderCabecalho() {
   qs("headerSubtitulo").innerText = [db.loja?.cidade, db.loja?.uf].filter(Boolean).join(" - ") || "Controle de joias";
   qs("splashNome").innerText = nome;
   const mark = qs("brandMark");
-  if(db.loja?.logo) mark.innerHTML = `<img src="${db.loja.logo}" alt="Logo">`; else mark.innerText = "◆";
-  if(db.loja?.logo) { qs("splashLogoObj").src = db.loja.logo; qs("splashLogoObj").style.display = "block"; qs("splashLogoFallback").style.display = "none"; }
-}
-
-function selecionarFotoCapa(indice) {
-  capaFotoAtual = (Number(indice) + CAPA_FOTOS.length) % CAPA_FOTOS.length;
-  renderCapaHome();
-}
-function renderCapaHome() {
-  const box = qs("homeCover");
-  if(!box || !CAPA_FOTOS.length) return;
-  const foto = CAPA_FOTOS[capaFotoAtual % CAPA_FOTOS.length];
-  const nomeLoja = db.loja?.nome || "Nalva Joias";
-  box.innerHTML = `
-    <div class="home-cover-main">
-      <img src="${escapeHTML(foto.src)}" alt="${escapeHTML(foto.titulo)}" loading="eager">
-      <div class="home-cover-shade"></div>
-      <div class="home-cover-copy"><span>${escapeHTML(nomeLoja)} · Ouro 18K</span><strong>${escapeHTML(foto.titulo)}</strong><small>${escapeHTML(foto.categoria)} · peças escolhidas para você</small></div>
-      <div class="home-cover-dots">${CAPA_FOTOS.map((_, i) => `<button type="button" aria-label="Foto ${i + 1}" class="${i === capaFotoAtual ? "active" : ""}" onclick="selecionarFotoCapa(${i})"></button>`).join("")}</div>
-    </div>
-    <div class="home-cover-thumbs">${CAPA_FOTOS.map((item, i) => `<button type="button" class="home-cover-thumb ${i === capaFotoAtual ? "active" : ""}" onclick="selecionarFotoCapa(${i})"><img src="${escapeHTML(item.src)}" alt="${escapeHTML(item.titulo)}" loading="lazy"><span>${escapeHTML(item.categoria)}</span></button>`).join("")}</div>`;
-  if(!capaTimer) capaTimer = setInterval(() => { if(document.visibilityState !== "hidden") selecionarFotoCapa(capaFotoAtual + 1); }, 7000);
+  const logo = db.loja?.logo || LOGO_PADRAO_ASSET;
+  if(mark) mark.innerHTML = `<img src="${escapeHTML(logo)}" alt="Logo">`;
+  const splash = qs("splashLogoObj"), fallback = qs("splashLogoFallback");
+  if(splash) { splash.src = logo; splash.style.display = "block"; }
+  if(fallback) fallback.style.display = "none";
 }
 
 function atualizarCustoVisualJoia() {
@@ -647,7 +636,7 @@ function renderResumoTopo() {
 function renderCategorias() {
   qs("homeCategorias").innerHTML = (db.categorias || []).map(cat => `
     <button class="cat-card cat-${escapeHTML(cat.id)} ${estado.categoria === cat.id ? "active" : ""}" onclick="setCategoria('${escapeHTML(cat.id)}')">
-      <span class="cat-icon cat-photo"><img src="${escapeHTML(CAPA_FOTO_CATEGORIA[cat.id] || CAPA_FOTOS[0]?.src || "")}" alt="${escapeHTML(cat.nome)}" loading="lazy"></span>
+      <span class="cat-icon cat-photo"><img src="${escapeHTML(CAPA_FOTO_CATEGORIA[cat.id] || CAPA_FOTO_CATEGORIA.correntaria)}" alt="${escapeHTML(cat.nome)}" loading="lazy"></span>
       <span class="cat-name">${escapeHTML(cat.nome)}</span>
     </button>`).join("");
   const bar = qs("activeFilterBar");
@@ -710,7 +699,6 @@ function renderTudo(scrollTop = false) {
   aplicarTema();
   renderCabecalho();
   atualizarPerfilAdminUI();
-  renderCapaHome();
   renderCategorias();
   renderChips();
   renderLista();
@@ -1165,7 +1153,8 @@ async function enviarPedidoEmail(vendaId) {
   const assunto = `Pedido ${venda.pedidoId || venda.id} · ${db.loja?.nome || "JoiasPro"}`;
   const corpo = montarMensagemPedidoEmail(venda);
   try {
-    const bytes = criarBytesPDFPedido(venda, { loja: db.loja });
+    const logo = await obterLogoParaPDF(db.loja?.logo || LOGO_PADRAO_PDF_ASSET);
+    const bytes = criarBytesPDFPedido(venda, { loja: { ...(db.loja || {}), logo } });
     if(typeof File !== "undefined" && navigator.share && navigator.canShare) {
       const arquivo = new File([bytes], `pedido_${normalizarTextoId(cliente.nomeCompleto || "cliente")}_${venda.data || getHojeSTR()}.pdf`, { type: "application/pdf" });
       if(navigator.canShare({ files: [arquivo] })) {
@@ -1386,12 +1375,12 @@ function abrirVenda(joiaId) {
   preencherSelectClientes("vendaCliente", j.clienteId || "", false);
   qs("vendaData").value = getHojeSTR();
   qs("vendaQuantidade").value = "1";
-  qs("vendaQuantidade").max = Math.max(1, Number(j.quantidadeEstoque || 1));
+  qs("vendaQuantidade").removeAttribute("max");
   qs("vendaValor").value = formatMoedaSem(j.precoVenda);
   qs("vendaForma").value = "";
   if(qs("vendaFrete")) qs("vendaFrete").value = "";
   if(qs("vendaModalidadeEnvio")) qs("vendaModalidadeEnvio").value = "pac";
-  if(qs("vendaStatusPedido")) qs("vendaStatusPedido").value = "pronto_para_envio";
+  if(qs("vendaStatusPedido")) qs("vendaStatusPedido").value = "automatico";
   qs("vendaObs").value = "";
   preencherSelectVendedores("");
   atualizarTotalVenda();
@@ -1414,18 +1403,25 @@ function salvarVenda() {
   if(!clienteId) return alert("Selecione o cliente da venda.");
   const qtdSolicitada = Math.max(1, Math.floor(Number(qs("vendaQuantidade").value || 1)));
   const qtdAtual = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
-  if(qtdSolicitada > qtdAtual) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}.`);
+  const statusSelecionado = qs("vendaStatusPedido")?.value || "automatico";
+  const enviarFabricacao = statusSelecionado === "aguardando_fabricacao" || (statusSelecionado === "automatico" && qtdSolicitada > qtdAtual);
+  if(qtdSolicitada > qtdAtual && !enviarFabricacao) return alert(`Estoque insuficiente. Disponível: ${qtdAtual}. Escolha o destino automático ou fabricação.`);
+  const statusPedido = enviarFabricacao ? "aguardando_fabricacao" : (statusSelecionado === "automatico" ? "pronto_para_envio" : statusSelecionado);
+  const quantidadeBaixada = Math.min(qtdSolicitada, qtdAtual);
   const vendedorSelecionado = ehVendedora() ? getVendedorAtual() : getPerfisAdminDisponiveis().find(p => p.id === qs("vendaVendedora")?.value && ehVendedora(p));
   const vendedor = vendedorSelecionado || (ehVendedora() ? getVendedorAtual() : null);
   const subtotal = Math.max(0, parseMoeda(qs("vendaValor").value));
   const valorFrete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
   const modalidadeEnvio = qs("vendaModalidadeEnvio")?.value || "pac";
   const custoUnitario = getCustoAtualJoia(joia);
-  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, custoUnitario, custoTotal: custoUnitario * qtdSolicitada, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido: qs("vendaStatusPedido")?.value || "pronto_para_envio", codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
+  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, custoUnitario, custoTotal: custoUnitario * qtdSolicitada, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido, codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
+  venda.quantidadePendenteFabricacao = Math.max(0, qtdSolicitada - qtdAtual);
+  venda.fabricacaoAutomatica = enviarFabricacao;
+  venda.origemFabricacao = enviarFabricacao ? "venda" : "";
   tocarRegistro(venda);
   db.vendas.push(venda);
-  joia.quantidadeEstoque = Math.max(0, qtdAtual - qtdSolicitada);
-  registrarMovimentoEstoque(joia, -qtdSolicitada);
+  joia.quantidadeEstoque = Math.max(0, qtdAtual - quantidadeBaixada);
+  registrarMovimentoEstoque(joia, -quantidadeBaixada);
   joia.status = joia.quantidadeEstoque > 0 ? "disponível" : "vendido";
   joia.clienteId = clienteId;
   joia.dataVenda = venda.data;
@@ -1514,7 +1510,7 @@ function pdfRetangulo(x, y, w, h, preenchimento = null, borda = null, espessura 
   return partes.join(" ");
 }
 function pdfTexto(texto, x, y, tamanho = 10, cor = "#241A12", negrito = false) {
-  return `${negrito ? "/F2" : "/F1"} ${tamanho} Tf ${pdfRgb(cor)} rg 1 0 0 1 ${x} ${y} Tm (${escaparTextoPDF(texto)}) Tj`;
+  return `BT ${negrito ? "/F2" : "/F1"} ${tamanho} Tf ${pdfRgb(cor)} rg 1 0 0 1 ${x} ${y} Tm (${escaparTextoPDF(texto)}) Tj ET`;
 }
 function pdfValor(valor, vazio = "____________________________") { return String(valor || vazio); }
 function pdfCortar(valor, limite = 62) { const texto = textoPDFSeguro(valor || ""); return texto.length > limite ? `${texto.slice(0, Math.max(0, limite - 3))}...` : texto; }
@@ -1547,6 +1543,22 @@ function extrairLogoPDF(dataUrl) {
   const bytes = base64ParaBytes(match[1]);
   const dimensoes = dimensoesJPEG(bytes);
   return bytes && dimensoes ? { bytes, width: dimensoes.width, height: dimensoes.height } : null;
+}
+async function obterLogoParaPDF(origem = "") {
+  const logo = String(origem || LOGO_PADRAO_PDF_ASSET);
+  if(/^data:image\//i.test(logo)) return logo;
+  try {
+    const resposta = await fetch(logo, { cache: "no-store" });
+    if(!resposta.ok) throw new Error("Logo indisponível");
+    const bytes = new Uint8Array(await resposta.arrayBuffer());
+    let binario = "";
+    const bloco = 0x8000;
+    for(let i = 0; i < bytes.length; i += bloco) binario += String.fromCharCode(...bytes.subarray(i, i + bloco));
+    const mime = resposta.headers.get("content-type") || "image/jpeg";
+    return `data:${mime};base64,${btoa(binario)}`;
+  } catch(e) {
+    return "";
+  }
 }
 function bytesParaString(bytes) { let texto = ""; for(let i = 0; i < bytes.length; i++) texto += String.fromCharCode(bytes[i]); return texto; }
 function montarConteudoFormularioPedidoPDF(venda, loja = {}, temLogo = false) {
@@ -1606,8 +1618,66 @@ function montarConteudoFormularioPedidoPDF(venda, loja = {}, temLogo = false) {
   out.push(pdfTexto("Logo mais enviaremos o código de rastreio para acompanhar seu pedido.", x + 12, 59, 8, "#746B60", false));
   return textoPDFSeguro(out.join("\n"));
 }
+function montarConteudoFormularioPedidoPDFA5(venda, loja = {}, temLogo = false) {
+  const cliente = getCliente(venda.clienteId) || {};
+  const joia = getJoia(venda.joiaId) || {};
+  const categoria = getCategoria(joia.categoria);
+  const out = [];
+  const pageW = 420, pageH = 595, x = 24, largura = pageW - 48;
+  out.push(pdfRetangulo(0, 0, pageW, pageH, "#FBF7F0"));
+  out.push(pdfRetangulo(17, 17, pageW - 34, pageH - 34, "#FFFFFF", "#E4D5C2", 0.8));
+  out.push(pdfRetangulo(17, 521, pageW - 34, 52, "#EFE1CF", "#D6B98C", 0.7));
+  if(temLogo) {
+    const logo = extrairLogoPDF(loja.logo);
+    if(logo) {
+      const escala = Math.min(42 / logo.width, 42 / logo.height);
+      const w = Math.max(1, Math.round(logo.width * escala)), h = Math.max(1, Math.round(logo.height * escala));
+      out.push(`q ${w} 0 0 ${h} 28 ${526 + (42 - h) / 2} cm /Im1 Do Q`);
+    }
+  } else out.push(pdfTexto("◆", 29, 544, 21, "#B8860B", true));
+  out.push(pdfTexto(pdfCortar(loja.nome || "Nalva Joias", 25), 82, 551, 13, "#52320E", true));
+  out.push(pdfTexto("FORMULÁRIO DE PEDIDO · OURO 18K", 82, 537, 7.4, "#8A6840", true));
+  const contato = [loja.telefone, loja.cidade, loja.uf].filter(Boolean).join(" · ");
+  if(contato) out.push(pdfTexto(pdfCortar(contato, 34), 252, 548, 6.1, "#746B60", false));
+  let y = 510;
+  const secao = titulo => { out.push(pdfRetangulo(x, y, largura, 16, "#DCC7AA", "#D1B58E", 0.4)); out.push(pdfTexto(titulo, x + 6, y + 5, 6.8, "#52320E", true)); y -= 21; };
+  const linha = (campos, altura = 17) => {
+    const espaco = 3, colunas = campos.length, colW = (largura - espaco * (colunas - 1)) / colunas;
+    campos.forEach((campo, idx) => {
+      const cx = x + idx * (colW + espaco), labelW = Math.min(colW * .39, Math.max(54, colW * .37));
+      out.push(pdfRetangulo(cx, y, labelW, altura, "#F2E9DD", "#DCCDBB", 0.35));
+      out.push(pdfRetangulo(cx + labelW, y, colW - labelW, altura, "#FFFFFF", "#DCCDBB", 0.35));
+      out.push(pdfTexto(pdfCortar(campo.label, 22), cx + 4, y + altura - 11, campo.label.length > 15 ? 5.1 : 5.8, "#746B60", true));
+      const valor = pdfCortar(campo.value ? campo.value : "________________", colunas === 1 ? 76 : 31);
+      out.push(pdfTexto(valor, cx + labelW + 4, y + altura - 11, 6.4, "#241A12", false));
+    });
+    y -= altura;
+  };
+  secao("DADOS DO CLIENTE");
+  linha([{label:"NOME COMPLETO", value:cliente.nomeCompleto}, {label:"CPF", value:cliente.cpf}]);
+  linha([{label:"TELEFONE", value:cliente.telefone}, {label:"E-MAIL", value:cliente.email}]);
+  linha([{label:"CEP", value:cliente.cep}, {label:"RUA", value:cliente.rua}]);
+  linha([{label:"NÚMERO", value:cliente.numero}, {label:"BAIRRO", value:cliente.bairro}]);
+  linha([{label:"CIDADE", value:cliente.cidade}, {label:"UF", value:cliente.uf}]);
+  linha([{label:"COMPLEMENTO", value:cliente.complemento}, {label:"PONTO DE REFERÊNCIA", value:cliente.pontoReferencia}]);
+  secao("DADOS DO PEDIDO");
+  linha([{label:"PEDIDO Nº", value:venda.pedidoId || venda.id}, {label:"DATA", value:formatDataBR(venda.data) || getHojeSTR()}]);
+  linha([{label:"VENDEDORA", value:venda.vendedorNome}, {label:"STATUS", value:getStatusPedidoLabel(venda.statusPedido)}]);
+  linha([{label:"PEÇA / DESCRIÇÃO", value:joia.descricao || categoria.nome}, {label:"REFERÊNCIA", value:joia.referencia}]);
+  linha([{label:"CATEGORIA", value:categoria.nome}, {label:"QUANTIDADE", value:Math.max(1, Number(venda.quantidade || 1))}]);
+  linha([{label:"OBSERVAÇÃO", value:venda.obs || ""}], 20);
+  secao("PAGAMENTO E ENVIO");
+  linha([{label:"SUBTOTAL", value:formatMoeda(venda.valorVenda)}, {label:"FRETE", value:formatMoeda(getValorFrete(venda))}]);
+  linha([{label:"VALOR TOTAL", value:formatMoeda(getValorTotalPedido(venda))}, {label:"PAGAMENTO", value:getFormaPagamentoLabel(venda.formaPagamento)}]);
+  linha([{label:"MODALIDADE", value:getModalidadeEnvioLabel(venda.modalidadeEnvio)}, {label:"RASTREIO", value:venda.codigoRastreio}]);
+  out.push(pdfRetangulo(x, 31, largura, 28, "#EFE1CF", "#D6B98C", 0.5));
+  out.push(pdfTexto("Obrigada por sua compra! Produto em ouro 18K.", x + 9, 47, 7.2, "#52320E", true));
+  out.push(pdfTexto("Logo mais enviaremos o código de rastreio para acompanhar seu pedido.", x + 9, 38, 6.4, "#746B60", false));
+  return textoPDFSeguro(out.join("\n"));
+}
+
 function montarConteudoPDFPedido(linhas, venda = null, loja = {}, temLogo = false) {
-  if(venda) return montarConteudoFormularioPedidoPDF(venda, loja, temLogo);
+  if(venda) return montarConteudoFormularioPedidoPDFA5(venda, loja, temLogo);
   const out = ["BT", "/F1 11 Tf"];
   let y = 790;
   (linhas || []).forEach((linha, index) => {
@@ -1644,7 +1714,7 @@ function criarBytesPDFPedido(linhasOuVenda, opcoes = {}) {
     pageRefs.push(`${pageObj} 0 R`);
     const recursosImagem = logo ? " /XObject << /Im1 5 0 R >>" : "";
     const conteudo = venda ? montarConteudoPDFPedido(null, venda, loja, !!logo) : montarConteudoPDFPedido(pagina);
-    objetos[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${recursosImagem} >> /Contents ${contentObj} 0 R >>`;
+    objetos[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 595] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${recursosImagem} >> /Contents ${contentObj} 0 R >>`;
     objetos[contentObj] = `<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`;
   });
   objetos[2] = `<< /Type /Pages /Kids [${pageRefs.join(" ")}] /Count ${paginas.length} >>`;
@@ -1663,11 +1733,12 @@ function criarBytesPDFPedido(linhasOuVenda, opcoes = {}) {
   for(let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 255;
   return bytes;
 }
-function gerarPDFPedido(vendaId) {
+async function gerarPDFPedido(vendaId) {
   const venda = (db.vendas || []).find(v => v.id === vendaId || v.pedidoId === vendaId);
   if(!venda) return false;
   try {
-    const bytes = criarBytesPDFPedido(venda, { loja: db.loja });
+    const logo = await obterLogoParaPDF(db.loja?.logo || LOGO_PADRAO_PDF_ASSET);
+    const bytes = criarBytesPDFPedido(venda, { loja: { ...(db.loja || {}), logo } });
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     const cliente = getCliente(venda.clienteId);
@@ -1820,6 +1891,15 @@ function renderPainelResultados() {
     acc[id].qtd += Math.max(1, Number(v.quantidade || 1)); acc[id].valor += getValorTotalPedido(v);
     return acc;
   }, {})).sort((a,b)=> b.qtd - a.qtd || b.valor - a.valor).slice(0,5);
+  const cidadesMes = Object.values(vendasMesLista.reduce((acc, v) => {
+    const cli = getCliente(v.clienteId) || {};
+    const cidade = [cli.cidade, cli.uf].filter(Boolean).join(" - ") || "Cidade não informada";
+    acc[cidade] = acc[cidade] || { nome: cidade, pedidos: 0, qtd: 0, valor: 0 };
+    acc[cidade].pedidos += 1;
+    acc[cidade].qtd += Math.max(1, Number(v.quantidade || 1));
+    acc[cidade].valor += getValorTotalPedido(v);
+    return acc;
+  }, {})).sort((a,b) => b.valor - a.valor || b.qtd - a.qtd).slice(0, 10);
   qs("painelResumo").innerHTML = `
     <div class="report-month-title">Consulta de ${escapeHTML(nomeMesLongo(mesRef))}</div>
     <div class="report-hero report-hero-3">
@@ -1861,6 +1941,10 @@ function renderPainelResultados() {
       <div class="chart-card">
         <div class="section-title">Itens mais vendidos do mês</div>
         ${topItensMes.length ? topItensMes.map(i => `<div class="ranking-row"><span>${escapeHTML(i.ref)} · ${escapeHTML(i.nome)}</span><strong>${i.qtd} un.</strong><small>${formatMoeda(i.valor)}</small></div>`).join("") : `<p class="hint">Sem vendas no mês selecionado.</p>`}
+      </div>
+      <div class="chart-card city-report-card">
+        <div class="section-title">Cidades que mais compram</div>
+        ${cidadesMes.length ? `<div class="table-wrap compact-report-table"><table><thead><tr><th>Cidade</th><th>Pedidos</th><th>Peças</th><th>Faturamento</th></tr></thead><tbody>${cidadesMes.map(c => `<tr><td>${escapeHTML(c.nome)}</td><td>${c.pedidos}</td><td>${c.qtd}</td><td>${formatMoeda(c.valor)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="hint">Sem cidades registradas no mês selecionado.</p>`}
       </div>
     </div>
     <div class="section-title">Resumo por categoria</div>
@@ -1919,7 +2003,7 @@ function abrirPainelVendasVendedoras() {
   const select = qs("filtroVendedoraAdmin");
   if(select) {
     const atual = select.value;
-    select.innerHTML = '<option value="">Todas as vendedoras</option>' + getPerfisAdminDisponiveis().filter(p => ehVendedora(p)).map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.nome)}</option>`).join("");
+    select.innerHTML = '<option value="">Todas as vendedoras</option>' + getVendedoresParaFiltro().map(p => `<option value="${escapeHTML(p.id)}">${escapeHTML(p.nome)}</option>`).join("");
     select.value = atual || "";
   }
   renderPainelVendasVendedoras();
@@ -1930,11 +2014,15 @@ function renderPainelVendasVendedoras() {
   const mes = qs("mesVendasVendedoras")?.value || getMesAtualSTR();
   const vendedorId = qs("filtroVendedoraAdmin")?.value || "";
   let vendas = (db.vendas || []).filter(v => String(v.data || "").slice(0,7) === mes && (v.vendedorId || v.vendedorNome));
-  if(vendedorId) { const perfil = getPerfisAdminDisponiveis().find(p => p.id === vendedorId); vendas = vendas.filter(v => v.vendedorId === vendedorId || (!v.vendedorId && perfil && String(v.vendedorNome || "").trim().toLowerCase() === String(perfil.nome || "").trim().toLowerCase())); }
+  if(vendedorId) {
+    const perfil = getVendedoresParaFiltro().find(p => p.id === vendedorId);
+    const nome = String(perfil?.nome || "").trim().toLowerCase();
+    vendas = vendas.filter(v => String(v.vendedorId || "") === vendedorId || (nome && String(v.vendedorNome || "").trim().toLowerCase() === nome));
+  }
   vendas.sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")) || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   const receita = vendas.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const unidades = vendas.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
-  const nomeVendedora = vendedorId ? (getPerfisAdminDisponiveis().find(p => p.id === vendedorId)?.nome || "Vendedora") : "Todas as vendedoras";
+  const nomeVendedora = vendedorId ? (getVendedoresParaFiltro().find(p => p.id === vendedorId)?.nome || "Vendedora") : "Todas as vendedoras";
   qs("resumoVendasVendedoras").innerHTML = `<div class="report-month-title">${escapeHTML(nomeVendedora)} · ${escapeHTML(nomeMesLongo(mes))}</div><div class="report-hero report-hero-3 seller-report-hero"><div><small>Faturamento</small><strong>${formatMoeda(receita)}</strong><em>${vendas.length} venda(s)</em></div><div><small>Peças vendidas</small><strong>${unidades}</strong><em>no mês selecionado</em></div><div><small>Vendedoras com vendas</small><strong>${new Set(vendas.map(v => v.vendedorId || v.vendedorNome)).size}</strong><em>dados completos do administrador</em></div></div>`;
   qs("listaVendasVendedoras").innerHTML = vendas.length ? vendas.map(v => { const j = getJoia(v.joiaId); const c = getCliente(v.clienteId); return `<div class="sale-card"><strong>${escapeHTML(formatDataBR(v.data))} · ${formatMoeda(getValorTotalPedido(v))}</strong><small>${escapeHTML(v.vendedorNome || "Vendedora não informada")} · ${escapeHTML(j?.referencia || "-")} · ${Math.max(1, Number(v.quantidade || 1))} un. · ${escapeHTML(c?.nomeCompleto || "Cliente não localizado")}</small><p>${escapeHTML(getStatusPedidoLabel(v.statusPedido))} · ${escapeHTML(getFormaPagamentoLabel(v.formaPagamento))}${v.codigoRastreio ? ` · ${escapeHTML(v.codigoRastreio)}` : ""}</p></div>`; }).join("") : `<div class="empty-state" style="height:180px"><div>📈</div><strong>Nenhuma venda encontrada</strong><p>Escolha outro mês ou vendedora.</p></div>`;
 }
@@ -2080,8 +2168,9 @@ function renderFabricacao() {
   const lista = [...(db.vendas || [])].filter(v => v.statusPedido === "aguardando_fabricacao").sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
   qs("listaFabricacaoConteudo").innerHTML = lista.length ? lista.map(v => {
     const cliente = getCliente(v.clienteId), joia = getJoia(v.joiaId);
-    return `<div class="followup-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia")} · pedido ${escapeHTML(v.pedidoId || v.id)} · ${escapeHTML(v.vendedorNome || "Loja")}</small><p>${escapeHTML(v.obs || "Aguardando a finalização da fabricação.")}</p></div><div class="followup-actions"><select onchange="atualizarStatusPedido('${escapeHTML(v.id)}', this.value)"><option value="aguardando_fabricacao" selected>Aguardando fabricação</option><option value="pronto_para_envio">Pronto para envio</option><option value="enviado">Enviado</option><option value="entregue">Entregue</option></select><button class="btn-outline small" onclick="abrirRastreioPedido('${escapeHTML(v.id)}')">Rastreio</button></div></div>`;
-  }).join("") : `<div class="empty-state compact-empty"><div>🏭</div><strong>Nenhum pedido em fabricação</strong><p>Ao registrar uma venda, escolha o status de fabricação.</p></div>`;
+    const pendente = Math.max(0, Number(v.quantidadePendenteFabricacao || 0));
+    return `<div class="followup-card"><div><strong>${escapeHTML(cliente?.nomeCompleto || "Cliente não localizado")}</strong><small>${escapeHTML(joia?.referencia || "Joia")} · pedido ${escapeHTML(v.pedidoId || v.id)} · ${Math.max(1, Number(v.quantidade || 1))} un.${pendente ? ` · ${pendente} un. para fabricar` : ""} · ${escapeHTML(v.vendedorNome || "Loja")}</small><p>${escapeHTML(v.obs || (v.fabricacaoAutomatica ? "Venda vinculada automaticamente à fabricação." : "Aguardando a finalização da fabricação."))}</p></div><div class="followup-actions"><select onchange="atualizarStatusPedido('${escapeHTML(v.id)}', this.value)"><option value="aguardando_fabricacao" selected>Aguardando fabricação</option><option value="pronto_para_envio">Pronto para envio</option><option value="enviado">Enviado</option><option value="entregue">Entregue</option></select><button class="btn-outline small" onclick="abrirRastreioPedido('${escapeHTML(v.id)}')">Rastreio</button></div></div>`;
+  }).join("") : `<div class="empty-state compact-empty"><div>🏭</div><strong>Nenhum pedido em fabricação</strong><p>O destino automático envia pedidos sem estoque para esta fila.</p></div>`;
 }
 function atualizarStatusPedido(vendaId, status) {
   const venda = (db.vendas || []).find(v => v.id === vendaId); if(!venda) return;
@@ -2333,6 +2422,19 @@ function exportarCSV(tipo) {
   } else if(tipo === "vendas") {
     rows = [["data","pedido","referencia","cliente","cpf","email","vendedor","quantidade","subtotal","frete","valor_total","forma_pagamento","modalidade_envio","status_pedido","codigo_rastreio","observacao"]];
     (db.vendas || []).forEach(v => { const cliente = getCliente(v.clienteId) || {}; rows.push([v.data, v.pedidoId || v.id, getJoia(v.joiaId)?.referencia || "", cliente.nomeCompleto || "", cliente.cpf || "", cliente.email || "", v.vendedorNome || "", v.quantidade || 1, formatMoedaSem(v.valorVenda), formatMoedaSem(getValorFrete(v)), formatMoedaSem(getValorTotalPedido(v)), getFormaPagamentoLabel(v.formaPagamento), getModalidadeEnvioLabel(v.modalidadeEnvio), getStatusPedidoLabel(v.statusPedido), v.codigoRastreio || "", v.obs || ""]); });
+  } else if(tipo === "cidades") {
+    const mes = getMesPainelSelecionado();
+    const mapa = {};
+    (db.vendas || []).filter(v => String(v.data || "").slice(0,7) === mes).forEach(v => {
+      const cliente = getCliente(v.clienteId) || {};
+      const cidade = [cliente.cidade, cliente.uf].filter(Boolean).join(" - ") || "Cidade não informada";
+      mapa[cidade] = mapa[cidade] || { pedidos: 0, pecas: 0, faturamento: 0 };
+      mapa[cidade].pedidos += 1;
+      mapa[cidade].pecas += Math.max(1, Number(v.quantidade || 1));
+      mapa[cidade].faturamento += getValorTotalPedido(v);
+    });
+    rows = [["mes","cidade","pedidos","pecas","faturamento"]];
+    Object.entries(mapa).sort((a,b) => b[1].faturamento - a[1].faturamento).forEach(([cidade, dados]) => rows.push([mes, cidade, dados.pedidos, dados.pecas, formatMoedaSem(dados.faturamento)]));
   }
   const csv = rows.map(r => r.map(campo => `"${String(campo ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });

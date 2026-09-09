@@ -655,3 +655,10 @@ body {
   .home-cover-copy small { font-size:10px; }
   .cat-icon.cat-photo { width:48px; height:48px; }
 }
+
+/* RelatÃ³rio de cidades e identidade da marca. */
+.city-report-card { grid-column: 1 / -1; }
+.compact-report-table { margin-top: 8px; }
+.compact-report-table table { min-width: 0; }
+.compact-report-table th, .compact-report-table td { padding: 8px 9px; }
+.splash-logo + #splashLogoObj { box-shadow: 0 14px 40px rgba(0,0,0,.16); }

@@ -1,9 +1,9 @@
-const CACHE_NAME = 'joiaspro-v0.6';
+const CACHE_NAME = 'joiaspro-v0.7';
 const APP_SHELL = [
   './',
   './index.html',
-  './style.css?v=0.6',
-  './app.js?v=0.6',
+  './style.css?v=0.7',
+  './app.js?v=0.7',
   './manifest.json',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
@@ -12,7 +12,9 @@ const APP_SHELL = [
   './assets/capa/pulseiras-ouro.jpeg',
   './assets/capa/pulseira-elos.jpeg',
   './assets/capa/aneis-coracao.jpeg',
-  './assets/capa/brincos-argolas.jpeg'
+  './assets/capa/brincos-argolas.jpeg',
+  './assets/nalva-logo.png',
+  './assets/nalva-logo-pdf.jpg'
 ];
 
 self.addEventListener('install', (event) => {

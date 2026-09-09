@@ -13,15 +13,15 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=0.6">
+  <link rel="stylesheet" href="style.css?v=0.7">
   <title>JoiasPro</title>
 </head>
 <body>
   <div id="splashScreen">
-    <div class="splash-logo" id="splashLogoFallback">◆</div>
-    <img id="splashLogoObj" alt="Logo" style="display:none; max-height:100px; max-width:160px; object-fit:contain; border-radius:18px;">
+    <div class="splash-logo" id="splashLogoFallback" style="display:none">◆</div>
+    <img id="splashLogoObj" src="assets/nalva-logo.png" alt="Logo" style="display:block; max-height:160px; max-width:210px; object-fit:contain; border-radius:50%;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v0.6</div>
+    <div class="splash-version" id="splashVersao">v0.7</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -87,7 +87,6 @@
     </header>
 
     <main class="main-content">
-      <section class="home-cover" id="homeCover" aria-label="Destaques da loja"></section>
       <section class="home-categories" id="homeCategorias"></section>
 
       <section class="filters">
@@ -280,7 +279,7 @@
         <div class="form-group"><label>Modalidade de envio</label><select id="vendaModalidadeEnvio"><option value="pac">PAC</option><option value="sedex">Sedex</option></select></div>
         <div class="sale-total-box"><small>Valor total do pedido</small><strong id="vendaTotalPedido">R$ 0,00</strong></div>
       </div>
-      <div class="form-group"><label>Status do pedido</label><select id="vendaStatusPedido"><option value="pronto_para_envio">Pronto para envio</option><option value="aguardando_fabricacao">Aguardando finalizar fabricação</option></select></div>
+      <div class="form-group"><label>Destino após fechar a venda</label><select id="vendaStatusPedido"><option value="automatico">Automático: estoque ou fabricação</option><option value="pronto_para_envio">Pronto para envio</option><option value="aguardando_fabricacao">Enviar para fabricação</option></select><small class="hint">Se a quantidade vendida superar o estoque, o pedido entra automaticamente em fabricação.</small></div>
       <div class="form-group"><label>Observação</label><textarea id="vendaObs" rows="3"></textarea></div>
       <div class="modal-actions"><button class="btn-cancel" onclick="fecharModal('modalVenda')">Cancelar</button><button class="btn-action" onclick="salvarVenda()">Confirmar venda e gerar PDF</button></div>
     </div>
@@ -310,6 +309,7 @@
         <button class="btn-outline" onclick="exportarCSV('joias')">Exportar joias CSV</button>
         <button class="btn-outline" onclick="exportarCSV('clientes')">Exportar clientes CSV</button>
         <button class="btn-outline" onclick="exportarCSV('vendas')">Exportar vendas CSV</button>
+        <button class="btn-outline" onclick="exportarCSV('cidades')">Exportar cidades CSV</button>
         <button class="btn-action" onclick="exportarDadosBackup()">Backup completo JSON</button>
       </div>
     </div>
@@ -535,6 +535,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=0.6" defer></script>
+  <script src="app.js?v=0.7" defer></script>
 </body>
 </html>

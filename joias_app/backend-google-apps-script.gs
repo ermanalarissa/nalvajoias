@@ -153,6 +153,9 @@ function normalizarBanco(dados) {
     v.modalidadeEnvio = v.modalidadeEnvio || v.modalidade || '';
     v.pedidoId = v.pedidoId || v.id;
     v.statusPedido = v.statusPedido || 'pronto_para_envio';
+    v.quantidadePendenteFabricacao = Math.max(0, Math.floor(Number(v.quantidadePendenteFabricacao || 0)));
+    v.fabricacaoAutomatica = !!v.fabricacaoAutomatica;
+    v.origemFabricacao = v.origemFabricacao || '';
     v.codigoRastreio = v.codigoRastreio || '';
     v.dataRastreio = Number(v.dataRastreio || 0);
     v.custoUnitario = Number(v.custoUnitario || 0);
