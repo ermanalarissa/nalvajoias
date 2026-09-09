@@ -31,12 +31,21 @@ const TEMAS_PREDEFINIDOS = [
 // aplicativo carregar rapidamente, sem depender de um serviço externo.
 const CAPA_FOTOS = [
   { src: "assets/capa/colar-ponto-luz.jpeg", titulo: "Brilho que fica", categoria: "Correntaria" },
-  { src: "assets/capa/escapulario-cartier.jpeg", titulo: "Detalhes com significado", categoria: "Escapulários" },
   { src: "assets/capa/pulseiras-ouro.jpeg", titulo: "Ouro em movimento", categoria: "Pulseiras" },
   { src: "assets/capa/pulseira-elos.jpeg", titulo: "Clássicos para todos os dias", categoria: "Pulseiras" },
   { src: "assets/capa/aneis-coracao.jpeg", titulo: "Peças para celebrar", categoria: "Anéis" },
   { src: "assets/capa/brincos-argolas.jpeg", titulo: "Elegância nos detalhes", categoria: "Argolas" }
 ];
+const CAPA_FOTO_CATEGORIA = {
+  correntaria: "assets/capa/colar-ponto-luz.jpeg",
+  pulseiras: "assets/capa/pulseiras-ouro.jpeg",
+  brincos: "assets/capa/brincos-argolas.jpeg",
+  argolas: "assets/capa/brincos-argolas.jpeg",
+  pingentes: "assets/capa/colar-ponto-luz.jpeg",
+  aneis: "assets/capa/aneis-coracao.jpeg",
+  escapularios: "assets/capa/colar-ponto-luz.jpeg",
+  aliancas: "assets/capa/aneis-coracao.jpeg"
+};
 
 const UFS = ["AC","AL","AP","AM","BA","CE","DF","ES","GO","MA","MT","MS","MG","PA","PB","PR","PE","PI","RJ","RN","RS","RO","RR","SC","SP","SE","TO"];
 
@@ -638,7 +647,7 @@ function renderResumoTopo() {
 function renderCategorias() {
   qs("homeCategorias").innerHTML = (db.categorias || []).map(cat => `
     <button class="cat-card cat-${escapeHTML(cat.id)} ${estado.categoria === cat.id ? "active" : ""}" onclick="setCategoria('${escapeHTML(cat.id)}')">
-      <span class="cat-icon">${escapeHTML(cat.icon || "◆")}</span>
+      <span class="cat-icon cat-photo"><img src="${escapeHTML(CAPA_FOTO_CATEGORIA[cat.id] || CAPA_FOTOS[0]?.src || "")}" alt="${escapeHTML(cat.nome)}" loading="lazy"></span>
       <span class="cat-name">${escapeHTML(cat.nome)}</span>
     </button>`).join("");
   const bar = qs("activeFilterBar");

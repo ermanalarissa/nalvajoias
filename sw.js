@@ -9,7 +9,6 @@ const APP_SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
   './assets/capa/colar-ponto-luz.jpeg',
-  './assets/capa/escapulario-cartier.jpeg',
   './assets/capa/pulseiras-ouro.jpeg',
   './assets/capa/pulseira-elos.jpeg',
   './assets/capa/aneis-coracao.jpeg',
