@@ -13,6 +13,15 @@
 const PROPERTY_KEY = 'JOIASPRO_DB_JSON';
 const LOCK_TIMEOUT_MS = 25000;
 
+function numeroFlexivel(valor) {
+  if (typeof valor === 'number') return isFinite(valor) ? valor : 0;
+  var texto = String(valor == null ? '' : valor).trim().replace(/\s/g, '').replace(/R\$/gi, '');
+  if (texto.indexOf(',') >= 0 && texto.indexOf('.') >= 0) texto = texto.replace(/\./g, '').replace(',', '.');
+  else if (texto.indexOf(',') >= 0) texto = texto.replace(',', '.');
+  var numero = parseFloat(texto.replace(/[^\d.-]/g, ''));
+  return isFinite(numero) ? numero : 0;
+}
+
 function doGet(e) {
   const dados = getBancoSalvo();
   const serverNow = Date.now();
@@ -46,7 +55,12 @@ function doPost(e) {
     // atrasado sem perceber; substituir o banco inteiro nesse caso apagaria
     // vendas/novos clientes feitos por outro aparelho. O merge preserva os
     // registros atuais e aplica somente alterações marcadas pelo cliente.
-    let finalDb = (atualRevision === 0 && baseRevision === 0) ? recebido : mesclarBancosNoServidor(atual, recebido);
+    // Mesmo na primeira gravação, só usamos o snapshot inteiro quando o servidor
+    // está realmente vazio. Um aparelho recém-conectado não pode apagar usuários,
+    // peças ou vendas que outro aparelho já tenha enviado.
+    const administradoresReais = (atual.administradores || []).filter(function(a) { return a && (a.id !== 'admin_padrao' || a._serverUpdatedAt || a._clientDirty); });
+    const servidorVazio = !(atual.joias || []).length && !(atual.clientes || []).length && !(atual.vendas || []).length && !administradoresReais.length && !Number(atual.configs.ultimaSincronizacao || 0);
+    let finalDb = (servidorVazio && atualRevision === 0 && baseRevision === 0) ? recebido : mesclarBancosNoServidor(atual, recebido);
     finalDb = normalizarBanco(finalDb);
 
     const novaRevision = atualRevision + 1;
@@ -95,7 +109,7 @@ function criarBancoBase() {
     anotacoes: [],
     administradores: [],
     auditoria: [],
-    configGerais: { corTema: '#9B6A2F', corSubHeader: '#fff8ef' },
+    configGerais: { corTema: '#9B6A2F', corSubHeader: '#fff8ef', taxaMaquinetaPadrao: 0 },
     configs: { url: '', dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: '1999', clientId: '' },
     _deleted: { joias: {}, clientes: {}, vendas: {}, listaEspera: {}, anotacoes: {}, categorias: {}, administradores: {} }
   };
@@ -128,6 +142,7 @@ function normalizarBanco(dados) {
   dados.administradores = Array.isArray(dados.administradores) ? dados.administradores : [];
   dados.auditoria = Array.isArray(dados.auditoria) ? dados.auditoria : [];
   dados.configGerais = Object.assign({}, base.configGerais, dados.configGerais || {});
+  dados.configGerais.taxaMaquinetaPadrao = Math.max(0, numeroFlexivel(dados.configGerais.taxaMaquinetaPadrao));
   dados.configs = Object.assign({}, base.configs, dados.configs || {});
   dados._deleted = Object.assign({}, base._deleted, dados._deleted || {});
   ['joias','clientes','vendas','listaEspera','anotacoes','categorias','administradores'].forEach(function(k) {
@@ -158,27 +173,34 @@ function normalizarBanco(dados) {
     v.origemFabricacao = v.origemFabricacao || '';
     v.codigoRastreio = v.codigoRastreio || '';
     v.dataRastreio = Number(v.dataRastreio || 0);
-    v.custoUnitario = Number(v.custoUnitario || 0);
-    v.custoTotal = Number(v.custoTotal || 0) || (v.custoUnitario * Math.max(1, Number(v.quantidade || 1)));
+    v.custoUnitario = numeroFlexivel(v.custoUnitario);
+    v.custoTotal = numeroFlexivel(v.custoTotal) || (v.custoUnitario * Math.max(1, Number(v.quantidade || 1)));
+    v.taxaMaquinetaPercentual = Math.max(0, numeroFlexivel(v.taxaMaquinetaPercentual));
+    v.taxaMaquinetaValor = Math.max(0, numeroFlexivel(v.taxaMaquinetaValor) || (Number(v.valorVenda || 0) * v.taxaMaquinetaPercentual / 100));
+    v.lucroLiquido = isFinite(Number(v.lucroLiquido)) ? Number(v.lucroLiquido) : (Number(v.valorVenda || 0) - v.custoTotal - v.taxaMaquinetaValor);
     var totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, 'valorTotalPedido') ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
   });
   dados.joias.forEach(function(j, idx) {
     if (!j.id) j.id = 'joia_' + idx;
-    j.pesoOuro = Number(j.pesoOuro || 0);
-    j.gramasCusto = Number(j.gramasCusto != null ? j.gramasCusto : j.pesoOuro) || 0;
-    j.indiceCusto = Number(j.indiceCusto != null ? j.indiceCusto : j.indice) || 0;
-    j.fatorDia = Number(j.fatorDia != null ? j.fatorDia : j.fator) || 0;
-    j.incidenciaImposto = Math.max(0, Number(j.incidenciaImposto != null ? j.incidenciaImposto : j.imposto) || 0);
+    j.pesoOuro = numeroFlexivel(j.pesoOuro);
+    j.gramasCusto = numeroFlexivel(j.gramasCusto != null ? j.gramasCusto : j.pesoOuro);
+    j.indiceCusto = numeroFlexivel(j.indiceCusto != null ? j.indiceCusto : j.indice);
+    j.fatorDia = numeroFlexivel(j.fatorDia != null ? j.fatorDia : j.fator);
+    j.incidenciaImposto = Math.max(0, numeroFlexivel(j.incidenciaImposto != null ? j.incidenciaImposto : j.imposto));
+    j.aplicaImposto = Object.prototype.hasOwnProperty.call(j, 'aplicaImposto') ? j.aplicaImposto !== false : j.incidenciaImposto > 0;
+    j.taxaMaquineta = Math.max(0, numeroFlexivel(j.taxaMaquineta != null ? j.taxaMaquineta : dados.configGerais.taxaMaquinetaPadrao));
     var custoBase = j.gramasCusto * j.indiceCusto * j.fatorDia;
-    var custoCalculado = custoBase * (1 + j.incidenciaImposto / 100);
-    j.custoBase = Number(j.custoBase || 0) || custoBase;
-    j.custoCalculado = Number(j.custoCalculado || 0) || custoCalculado;
-    j.statusPagamento = j.statusPagamento === 'pago' || j.statusPagamento === 'aberto' ? j.statusPagamento : (Number(j.precoCompra || 0) > 0 ? 'pago' : 'aberto');
+    var custoCalculado = custoBase * (j.aplicaImposto ? (1 + j.incidenciaImposto / 100) : 1);
+    var temFormulaCusto = j.gramasCusto > 0 && j.indiceCusto > 0 && j.fatorDia > 0;
+    var precoCompraInformado = numeroFlexivel(j.precoCompra);
+    j.custoBase = temFormulaCusto ? custoBase : numeroFlexivel(j.custoBase);
+    j.custoCalculado = temFormulaCusto ? custoCalculado : numeroFlexivel(j.custoCalculado);
+    j.statusPagamento = j.statusPagamento === 'pago' || j.statusPagamento === 'aberto' ? j.statusPagamento : (precoCompraInformado > 0 ? 'pago' : 'aberto');
     j.dataPagamento = j.dataPagamento || '';
-    j.custoFixo = Number(j.custoFixo || 0) || (j.statusPagamento === 'pago' ? Number(j.precoCompra || 0) : 0);
+    j.custoFixo = j.statusPagamento === 'pago' ? (numeroFlexivel(j.custoFixo) || precoCompraInformado) : 0;
     j.custoFixoData = j.custoFixoData || (j.statusPagamento === 'pago' ? j.dataPagamento : '');
-    j.precoCompra = Number(j.precoCompra || 0) || (j.statusPagamento === 'pago' ? j.custoFixo : j.custoCalculado);
+    j.precoCompra = j.statusPagamento === 'pago' ? (j.custoFixo || precoCompraInformado || j.custoCalculado) : (temFormulaCusto ? j.custoCalculado : precoCompraInformado);
   });
   dados.listaEspera.forEach(function(item, idx) {
     if (!item.id) item.id = 'espera_' + idx;
@@ -202,6 +224,20 @@ function normalizarBanco(dados) {
     a.tipo = a.tipo || (a.isAdmin === false ? 'vendedora' : 'admin');
     a.isAdmin = a.tipo !== 'vendedora';
   });
+  var temAdministrador = dados.administradores.some(function(a) {
+    return a && a.nome && a.senha && a.tipo !== 'vendedora' && a.isAdmin !== false;
+  });
+  if (!temAdministrador) {
+    dados.administradores.unshift({
+      id: 'admin_padrao',
+      nome: 'Administrador',
+      senha: String(dados.configs.senhaAdmin || '1999'),
+      tipo: 'admin',
+      isAdmin: true,
+      forcarTrocaSenha: false,
+      updatedAt: 0
+    });
+  }
 
   return dados;
 }

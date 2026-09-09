@@ -591,12 +591,14 @@ body {
 .home-cover-thumb.active img { opacity:1; }
 .cost-formula-card { margin:2px 0 14px; padding:12px; border:1px solid rgba(184,134,11,.28); border-radius:16px; background:linear-gradient(145deg,#fff,var(--theme-sub)); }
 .cost-formula-card .section-title { margin-top:0; }
-.cost-breakdown { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:2px 0 12px; }
+.cost-breakdown { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:2px 0 12px; }
 .cost-breakdown > div { border:1px solid var(--line); border-radius:12px; padding:9px; background:#fff; }
 .cost-breakdown small, .cost-fixed-line span { display:block; color:var(--muted); font-size:10px; font-weight:950; text-transform:uppercase; }
 .cost-breakdown strong { display:block; color:var(--ink); margin-top:4px; font-size:14px; }
 .cost-breakdown .cost-total { border-color:var(--theme-base); background:var(--theme-soft); }
 .cost-breakdown .cost-total strong { color:var(--theme-dark); font-size:17px; }
+.check-line { display:flex; align-items:center; gap:8px; min-height:42px; color:var(--muted); font-size:12px; font-weight:900; }
+.check-line input { width:auto; accent-color:var(--theme-base); }
 .cost-fixed-line { display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px dashed var(--theme-base); border-radius:12px; padding:10px 11px; background:#fffdf7; }
 .cost-fixed-line strong { color:var(--theme-dark); text-align:right; }
 .finance-hero { margin-top:12px; }
@@ -606,6 +608,9 @@ body {
 .finance-card small { margin-top:4px; color:var(--muted); font-size:11px; font-weight:800; overflow-wrap:anywhere; }
 .finance-card-actions { flex:0 0 auto; display:flex; flex-direction:column; align-items:flex-end; gap:7px; }
 .finance-card-actions > strong { color:var(--theme-base); font-size:15px; }
+.finance-default-box { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin:12px 0 14px; padding:12px; border:1px solid var(--line); border-radius:14px; background:#fff; }
+.finance-default-box .form-group { flex:0 1 240px; margin:0; }
+.finance-default-box small { flex:1 1 100%; color:var(--muted); font-size:11px; font-weight:800; }
 @media (max-width:760px) {
   .home-cover-main, .home-cover-main > img { min-height:180px; max-height:205px; }
   .home-cover-copy { max-width:78%; left:14px; bottom:18px; }

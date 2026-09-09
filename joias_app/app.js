@@ -1,4 +1,4 @@
-const APP_VERSION = "v0.7";
+const APP_VERSION = "v0.8";
 const STORAGE_KEY = "joiaspro_v1";
 const CLIENT_KEY = "joiaspro_client_id";
 // A consulta curta mantém os aparelhos próximos sem bloquear a tela. A fila
@@ -112,9 +112,22 @@ function calcularCustoJoia(joia = {}) {
   const indice = Math.max(0, parseNumeroFlexivel(joia.indiceCusto ?? joia.indice));
   const fatorDia = Math.max(0, parseNumeroFlexivel(joia.fatorDia ?? joia.fator));
   const incidenciaImposto = Math.max(0, parseNumeroFlexivel(joia.incidenciaImposto ?? joia.imposto));
+  const temFlagImposto = Object.prototype.hasOwnProperty.call(joia, "aplicaImposto");
+  const aplicaImposto = temFlagImposto ? joia.aplicaImposto !== false : incidenciaImposto > 0;
   const custoBase = gramas * indice * fatorDia;
-  const valorImposto = custoBase * (incidenciaImposto / 100);
-  return { gramas, indice, fatorDia, incidenciaImposto, custoBase, valorImposto, total: custoBase + valorImposto };
+  const valorImposto = aplicaImposto ? custoBase * (incidenciaImposto / 100) : 0;
+  return { gramas, indice, fatorDia, incidenciaImposto, aplicaImposto, custoBase, valorImposto, total: custoBase + valorImposto };
+}
+function getTaxaMaquinetaJoia(joia = {}) {
+  const valor = Object.prototype.hasOwnProperty.call(joia, "taxaMaquineta")
+    ? joia.taxaMaquineta
+    : db?.configGerais?.taxaMaquinetaPadrao;
+  return Math.max(0, parseNumeroFlexivel(valor));
+}
+function calcularTaxaMaquineta(valorVenda, percentual) {
+  const valor = Math.max(0, parseNumeroFlexivel(valorVenda));
+  const taxa = Math.max(0, parseNumeroFlexivel(percentual));
+  return valor * (taxa / 100);
 }
 function getCustoFixoJoia(joia = {}) {
   const fixo = parseNumeroFlexivel(joia.custoFixo);
@@ -204,7 +217,7 @@ function criarBancoBase() {
     anotacoes: [],
     administradores: [],
     auditoria: [],
-    configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef" },
+    configGerais: { temaId: "ouro_classico", corTema: "#9B6A2F", corSubHeader: "#fff8ef", taxaMaquinetaPadrao: 0 },
     configs: { url: "", dadosBaixados: false, somenteLocal: false, ultimaMudancaLocal: 0, ultimaSincronizacao: 0, serverNow: 0, syncRevision: 0, senhaAdmin: "1999", clientId: getClientIdLocal() },
     _deleted: { joias: {}, clientes: {}, vendas: {}, listaEspera: {}, anotacoes: {}, categorias: {}, administradores: {} }
   };
@@ -231,6 +244,7 @@ function normalizarBanco(dados, base = criarBancoBase()) {
   dados.administradores = Array.isArray(dados.administradores) ? dados.administradores : [];
   dados.auditoria = filtrarAuditoriaRecente(Array.isArray(dados.auditoria) ? dados.auditoria : []);
   dados.configGerais = { ...base.configGerais, ...(dados.configGerais || {}) };
+  dados.configGerais.taxaMaquinetaPadrao = Math.max(0, parseNumeroFlexivel(dados.configGerais.taxaMaquinetaPadrao));
   dados.configs = { ...base.configs, ...(dados.configs || {}) };
   dados.configs.clientId = dados.configs.clientId || getClientIdLocal();
   dados._deleted = { ...base._deleted, ...(dados._deleted || {}) };
@@ -254,14 +268,20 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     j.indiceCusto = parseNumeroFlexivel(j.indiceCusto ?? j.indice);
     j.fatorDia = parseNumeroFlexivel(j.fatorDia ?? j.fator);
     j.incidenciaImposto = Math.max(0, parseNumeroFlexivel(j.incidenciaImposto ?? j.imposto));
+    j.aplicaImposto = Object.prototype.hasOwnProperty.call(j, "aplicaImposto") ? j.aplicaImposto !== false : j.incidenciaImposto > 0;
+    j.taxaMaquineta = Math.max(0, parseNumeroFlexivel(j.taxaMaquineta ?? dados.configGerais.taxaMaquinetaPadrao));
     const custoCalculado = calcularCustoJoia(j);
-    j.custoBase = parseNumeroFlexivel(j.custoBase) || custoCalculado.custoBase;
-    j.custoCalculado = parseNumeroFlexivel(j.custoCalculado) || custoCalculado.total;
+    const temFormulaCusto = custoCalculado.gramas > 0 && custoCalculado.indice > 0 && custoCalculado.fatorDia > 0;
+    j.custoBase = temFormulaCusto ? custoCalculado.custoBase : parseNumeroFlexivel(j.custoBase);
+    j.custoCalculado = temFormulaCusto ? custoCalculado.total : parseNumeroFlexivel(j.custoCalculado);
     j.statusPagamento = ["pago", "aberto"].includes(j.statusPagamento) ? j.statusPagamento : (parseNumeroFlexivel(j.precoCompra) > 0 ? "pago" : "aberto");
     j.dataPagamento = j.dataPagamento || "";
-    j.custoFixo = parseNumeroFlexivel(j.custoFixo) || (j.statusPagamento === "pago" ? parseNumeroFlexivel(j.precoCompra) : 0);
+    const precoCompraInformado = parseNumeroFlexivel(j.precoCompra);
+    j.custoFixo = j.statusPagamento === "pago" ? (parseNumeroFlexivel(j.custoFixo) || precoCompraInformado) : 0;
     j.custoFixoData = j.custoFixoData || (j.statusPagamento === "pago" ? j.dataPagamento : "");
-    j.precoCompra = parseNumeroFlexivel(j.precoCompra) || (j.statusPagamento === "pago" ? j.custoFixo : j.custoCalculado);
+    j.precoCompra = j.statusPagamento === "pago"
+      ? (j.custoFixo || precoCompraInformado || j.custoCalculado)
+      : (temFormulaCusto ? j.custoCalculado : precoCompraInformado);
     j.precoVenda = Number(j.precoVenda || 0);
     j.status = ["disponível","reservado","vendido"].includes(j.status) ? j.status : "disponível";
     const qtdInformada = Number(j.quantidadeEstoque);
@@ -311,6 +331,9 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     v.dataRastreio = Number(v.dataRastreio || 0);
     v.custoUnitario = parseNumeroFlexivel(v.custoUnitario);
     v.custoTotal = parseNumeroFlexivel(v.custoTotal) || (v.custoUnitario * v.quantidade);
+    v.taxaMaquinetaPercentual = Math.max(0, parseNumeroFlexivel(v.taxaMaquinetaPercentual));
+    v.taxaMaquinetaValor = Math.max(0, parseNumeroFlexivel(v.taxaMaquinetaValor) || calcularTaxaMaquineta(v.valorVenda, v.taxaMaquinetaPercentual));
+    v.lucroLiquido = Number.isFinite(Number(v.lucroLiquido)) ? Number(v.lucroLiquido) : (v.valorVenda - v.custoTotal - v.taxaMaquinetaValor);
     const totalInformado = Number(v.valorTotalPedido);
     v.valorTotalPedido = Number.isFinite(totalInformado) && Object.prototype.hasOwnProperty.call(v, "valorTotalPedido") ? Math.max(0, totalInformado) : Math.max(0, v.valorVenda + v.valorFrete);
     v.updatedAt = Number(v.updatedAt || 0);
@@ -346,6 +369,18 @@ function normalizarBanco(dados, base = criarBancoBase()) {
     a.forcarTrocaSenha = !!a.forcarTrocaSenha;
     a.updatedAt = Number(a.updatedAt || 0);
   });
+  const temAdministrador = dados.administradores.some(a => a && a.nome && a.senha && a.tipo !== "vendedora" && a.isAdmin !== false);
+  if(!temAdministrador) {
+    dados.administradores.unshift({
+      id: "admin_padrao",
+      nome: "Administrador",
+      senha: String(dados.configs.senhaAdmin || "1999"),
+      tipo: "admin",
+      isAdmin: true,
+      forcarTrocaSenha: false,
+      updatedAt: 0
+    });
+  }
   return dados;
 }
 
@@ -408,7 +443,8 @@ function getPerfisAdminDisponiveis() {
     return { id: a.id, nome: a.nome, senha: String(a.senha), tipo, isAdmin: tipo !== "vendedora", forcarTrocaSenha: !!a.forcarTrocaSenha };
   });
 
-  if(perfis.length === 0) perfis.push({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), tipo: "admin", isAdmin: true, forcarTrocaSenha: false });
+  const temAdministrador = perfis.some(p => p.tipo !== "vendedora" && p.isAdmin !== false);
+  if(!temAdministrador) perfis.unshift({ id: "admin_padrao", nome: "Administrador", senha: String(db.configs.senhaAdmin || "1999"), tipo: "admin", isAdmin: true, forcarTrocaSenha: false });
   return perfis;
 }
 
@@ -536,6 +572,7 @@ function salvarTrocaSenhaPerfil() {
   }
   registrarAuditoria("Senha alterada", `Senha do perfil ${adminLogado.nome} foi alterada.`);
   salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
   fecharModal("modalTrocaSenha");
   alert("Senha alterada.");
 }
@@ -579,12 +616,22 @@ function atualizarCustoVisualJoia() {
     gramasCusto: parseNumeroFlexivel(qs("joiaPeso")?.value),
     indiceCusto: parseNumeroFlexivel(qs("joiaIndiceCusto")?.value),
     fatorDia: parseNumeroFlexivel(qs("joiaFatorDia")?.value),
-    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value)
+    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value),
+    aplicaImposto: qs("joiaAplicarImposto") ? qs("joiaAplicarImposto").checked : parseNumeroFlexivel(qs("joiaImposto")?.value) > 0
   };
   const custo = calcularCustoJoia(form);
+  const taxaPercentual = parseNumeroFlexivel(qs("joiaTaxaMaquineta")?.value);
+  const precoVenda = parseMoeda(qs("joiaVenda")?.value || "");
+  const valorTaxa = calcularTaxaMaquineta(precoVenda, taxaPercentual);
   if(qs("joiaCustoBase")) qs("joiaCustoBase").innerText = formatMoeda(custo.custoBase);
   if(qs("joiaValorImposto")) qs("joiaValorImposto").innerText = formatMoeda(custo.valorImposto);
+  if(qs("joiaValorTaxaMaquineta")) qs("joiaValorTaxaMaquineta").innerText = formatMoeda(valorTaxa);
   if(qs("joiaCustoCalculado")) qs("joiaCustoCalculado").innerText = formatMoeda(custo.total);
+  if(qs("joiaFormulaCusto")) {
+    const imposto = custo.aplicaImposto && custo.incidenciaImposto > 0 ? ` + ${formatDecimal(custo.incidenciaImposto, 2)}% de imposto` : " (sem imposto)";
+    qs("joiaFormulaCusto").innerText = `${formatDecimal(custo.gramas, 3)} g × ${formatDecimal(custo.indice, 2)} × ${formatDecimal(custo.fatorDia, 6)}${imposto}`;
+  }
+  if(qs("joiaLucroEstimado")) qs("joiaLucroEstimado").innerText = formatMoeda(precoVenda - custo.total - valorTaxa);
   const status = qs("joiaStatusPagamento")?.value || "aberto";
   const joiaAtual = getJoia(qs("joiaId")?.value) || {};
   const fixo = status === "pago" ? (parseNumeroFlexivel(joiaAtual.custoFixo) || custo.total) : 0;
@@ -613,14 +660,15 @@ function calcularResumo(mesRef = getMesAtualSTR()) {
   const receitaMes = vendasMes.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const qtdVendidaMes = vendasMes.reduce((s,v) => s + Math.max(1, Number(v.quantidade || 1)), 0);
   const custoVendidoMes = vendasMes.reduce((s,v) => s + getCustoVenda(v) * Math.max(1, Number(v.quantidade || 1)), 0);
+  const taxasMaquinetaMes = vendasMes.reduce((s,v) => s + (Number(v.taxaMaquinetaValor || 0) || calcularTaxaMaquineta(v.valorVenda, v.taxaMaquinetaPercentual)), 0);
   const pesoVendidoMes = vendasMes.reduce((s,v) => { const j = getJoia(v.joiaId); return s + Number(j?.pesoOuro || 0) * Math.max(1, Number(v.quantidade || 1)); }, 0);
   const ticketMedioMes = vendasMes.length ? receitaMes / vendasMes.length : 0;
-  const margemRealMes = receitaMes - custoVendidoMes;
+  const margemRealMes = receitaMes - custoVendidoMes - taxasMaquinetaMes;
   const mesAnterior = deslocarMes(mesRef, -1);
   const vendasMesAnterior = vendas.filter(v => String(v.data || "").slice(0,7) === mesAnterior);
   const receitaMesAnterior = vendasMesAnterior.reduce((s,v) => s + getValorTotalPedido(v), 0);
   const variacaoMes = receitaMesAnterior ? ((receitaMes - receitaMesAnterior) / receitaMesAnterior) * 100 : (receitaMes ? 100 : 0);
-  return { total: joias.length, totalUnidades: estoqueQtd + qtdVendidaTotal, estoque: estoqueQtd, estoqueItens: estoque.length, disponiveis: disponiveisQtd, reservadas: reservadasQtd, vendidas: qtdVendidaTotal, vendidasJoias: vendidasJoias.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, qtdVendidaMes, vendasMes, receitaMes, custoVendidoMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
+  return { total: joias.length, totalUnidades: estoqueQtd + qtdVendidaTotal, estoque: estoqueQtd, estoqueItens: estoque.length, disponiveis: disponiveisQtd, reservadas: reservadasQtd, vendidas: qtdVendidaTotal, vendidasJoias: vendidasJoias.length, custoEstoque, vendaEstoque, margemPotencial: vendaEstoque - custoEstoque, pesoEstoque, receitaVendida, vendasMesQtd: vendasMes.length, qtdVendidaMes, vendasMes, receitaMes, custoVendidoMes, taxasMaquinetaMes, pesoVendidoMes, ticketMedioMes, margemRealMes, mesRef, mesAnterior, receitaMesAnterior, variacaoMes };
 }
 
 function renderResumoTopo() {
@@ -731,6 +779,8 @@ function abrirFormularioJoia(id = "") {
     qs("joiaIndiceCusto").value = j.indiceCusto ? formatMoedaSem(j.indiceCusto) : "";
     qs("joiaFatorDia").value = j.fatorDia ? formatDecimal(j.fatorDia, 6) : "";
     qs("joiaImposto").value = j.incidenciaImposto ? formatDecimal(j.incidenciaImposto, 2) : "";
+    if(qs("joiaAplicarImposto")) qs("joiaAplicarImposto").checked = j.aplicaImposto !== false && Number(j.incidenciaImposto || 0) > 0;
+    if(qs("joiaTaxaMaquineta")) qs("joiaTaxaMaquineta").value = formatDecimal(getTaxaMaquinetaJoia(j), 2);
     qs("joiaStatusPagamento").value = j.statusPagamento || (j.custoFixo || j.precoCompra ? "pago" : "aberto");
     qs("joiaDataPagamento").value = j.dataPagamento || "";
     qs("joiaCompra").value = j.precoCompra ? formatMoedaSem(j.precoCompra) : "";
@@ -750,6 +800,8 @@ function abrirFormularioJoia(id = "") {
     qs("joiaIndiceCusto").value = "";
     qs("joiaFatorDia").value = "";
     qs("joiaImposto").value = "";
+    if(qs("joiaAplicarImposto")) qs("joiaAplicarImposto").checked = false;
+    if(qs("joiaTaxaMaquineta")) qs("joiaTaxaMaquineta").value = db.configGerais?.taxaMaquinetaPadrao ? formatDecimal(db.configGerais.taxaMaquinetaPadrao, 2) : "";
     qs("joiaStatusPagamento").value = "aberto";
     qs("joiaDataPagamento").value = "";
     qs("joiaCompra").value = "";
@@ -828,12 +880,14 @@ function salvarJoiaForm() {
   if(!joia) { joia = { id: gerarIdLocal("joia"), dataCadastro: getHojeSTR() }; db.joias.push(joia); }
   const quantidadeAnterior = Math.max(0, Math.floor(Number(joia.quantidadeEstoque || 0)));
   const precoCompraAnterior = Number(joia.precoCompra || 0);
+  const aplicaImposto = qs("joiaAplicarImposto") ? qs("joiaAplicarImposto").checked : parseNumeroFlexivel(qs("joiaImposto")?.value) > 0;
   const custoFormula = calcularCustoJoia({
     pesoOuro: parseNumeroFlexivel(qs("joiaPeso").value),
     gramasCusto: parseNumeroFlexivel(qs("joiaPeso").value),
     indiceCusto: parseNumeroFlexivel(qs("joiaIndiceCusto")?.value),
     fatorDia: parseNumeroFlexivel(qs("joiaFatorDia")?.value),
-    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value)
+    incidenciaImposto: parseNumeroFlexivel(qs("joiaImposto")?.value),
+    aplicaImposto
   });
   const statusPagamento = qs("joiaStatusPagamento")?.value || "aberto";
   const custoFixoAnterior = parseNumeroFlexivel(joia.custoFixo);
@@ -841,6 +895,8 @@ function salvarJoiaForm() {
   const custoFixo = statusPagamento === "pago" ? (estavaPago ? custoFixoAnterior : (custoFormula.total || precoCompraAnterior)) : custoFixoAnterior;
   const dataPagamento = statusPagamento === "pago" ? (qs("joiaDataPagamento")?.value || joia.dataPagamento || getHojeSTR()) : (joia.dataPagamento || "");
   const custoAtual = custoFormula.total || custoFixo || precoCompraAnterior;
+  const podeEditarCusto = ehAdministrador() || nova;
+  const statusPagamentoFinal = podeEditarCusto ? statusPagamento : (joia.statusPagamento || "aberto");
   Object.assign(joia, {
     referencia,
     categoria,
@@ -849,16 +905,18 @@ function salvarJoiaForm() {
     // O campo de custo fica oculto para a vendedora e nunca pode ser zerado
     // por uma edição feita nesse perfil.
     precoCompra: ehVendedora() ? precoCompraAnterior : (statusPagamento === "pago" ? custoFixo : custoAtual),
-    gramasCusto: custoFormula.gramas,
-    indiceCusto: custoFormula.indice,
-    fatorDia: custoFormula.fatorDia,
-    incidenciaImposto: custoFormula.incidenciaImposto,
-    custoBase: custoFormula.custoBase,
-    custoCalculado: custoFormula.total,
-    custoFixo,
-    statusPagamento,
-    dataPagamento,
-    custoFixoData: statusPagamento === "pago" ? dataPagamento : (joia.custoFixoData || ""),
+    gramasCusto: podeEditarCusto ? custoFormula.gramas : joia.gramasCusto,
+    indiceCusto: podeEditarCusto ? custoFormula.indice : joia.indiceCusto,
+    fatorDia: podeEditarCusto ? custoFormula.fatorDia : joia.fatorDia,
+    incidenciaImposto: podeEditarCusto ? custoFormula.incidenciaImposto : joia.incidenciaImposto,
+    aplicaImposto: podeEditarCusto ? custoFormula.aplicaImposto : joia.aplicaImposto,
+    taxaMaquineta: podeEditarCusto ? Math.max(0, parseNumeroFlexivel(qs("joiaTaxaMaquineta")?.value || db.configGerais?.taxaMaquinetaPadrao)) : getTaxaMaquinetaJoia(joia),
+    custoBase: podeEditarCusto ? custoFormula.custoBase : joia.custoBase,
+    custoCalculado: podeEditarCusto ? custoFormula.total : joia.custoCalculado,
+    custoFixo: podeEditarCusto && statusPagamento === "pago" ? custoFixo : (podeEditarCusto ? 0 : joia.custoFixo),
+    statusPagamento: statusPagamentoFinal,
+    dataPagamento: podeEditarCusto ? dataPagamento : joia.dataPagamento,
+    custoFixoData: podeEditarCusto && statusPagamento === "pago" ? dataPagamento : (podeEditarCusto ? "" : (joia.custoFixoData || "")),
     precoVenda: parseMoeda(qs("joiaVenda").value),
     quantidadeEstoque,
     quantidadeInicial: Math.max(Number(joia.quantidadeInicial || 0), quantidadeEstoque),
@@ -873,6 +931,7 @@ function salvarJoiaForm() {
   tocarRegistro(joia);
   registrarAuditoria(nova ? "Joia cadastrada" : "Joia alterada", `Ref. ${referencia}`);
   salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
   fecharModal("modalJoiaForm");
   renderTudo();
 }
@@ -882,11 +941,12 @@ function abrirDetalheJoia(id) {
   const cat = getCategoria(j.categoria);
   const cli = getCliente(j.clienteId);
   const custoAtual = getCustoAtualJoia(j);
-  const lucro = Number(j.precoVenda || 0) - custoAtual;
+  const taxaMaquineta = calcularTaxaMaquineta(Number(j.precoVenda || 0), getTaxaMaquinetaJoia(j));
+  const lucro = Number(j.precoVenda || 0) - custoAtual - taxaMaquineta;
   const vendas = (db.vendas || []).filter(v => v.joiaId === j.id).sort((a,b) => String(b.data).localeCompare(String(a.data)));
   const blocoFinanceiroJoia = ehAdministrador() ? `
        <div class="detail-box"><small>Custo ${j.statusPagamento === "pago" ? "fixo" : "estimado"}</small><strong>${formatMoeda(custoAtual)}</strong><small>${j.statusPagamento === "pago" ? `pago em ${escapeHTML(formatDataBR(j.dataPagamento) || "-")}` : "em aberto"}</small></div>
-       <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong></div>` : "";
+       <div class="detail-box"><small>Margem un.</small><strong>${formatMoeda(lucro)}</strong><small>maquineta: ${formatMoeda(taxaMaquineta)}</small></div>` : "";
   qs("detalheJoiaConteudo").innerHTML = `
     <div class="detail-header">
       <div class="detail-photo" onclick="abrirFotoGrande('${escapeHTML(j.id)}')">${j.foto ? `<img src="${j.foto}" alt="${escapeHTML(j.referencia)}">` : `<span>${escapeHTML(cat.icon || "◆")}</span>`}</div>
@@ -1301,6 +1361,7 @@ function salvarClienteForm() {
   tocarRegistro(c);
   registrarAuditoria(novo ? "Cliente cadastrado" : "Cliente alterado", nome);
   salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
   fecharModal("modalClienteForm");
   renderClientes();
   preencherSelectClientes("joiaCliente", qs("joiaCliente")?.value || "", true);
@@ -1414,7 +1475,9 @@ function salvarVenda() {
   const valorFrete = Math.max(0, parseMoeda(qs("vendaFrete")?.value || ""));
   const modalidadeEnvio = qs("vendaModalidadeEnvio")?.value || "pac";
   const custoUnitario = getCustoAtualJoia(joia);
-  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, custoUnitario, custoTotal: custoUnitario * qtdSolicitada, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido, codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
+  const taxaMaquinetaPercentual = getTaxaMaquinetaJoia(joia);
+  const taxaMaquinetaValor = calcularTaxaMaquineta(subtotal, taxaMaquinetaPercentual);
+  const venda = { id: gerarIdLocal("venda"), pedidoId: gerarIdLocal("pedido"), joiaId: joia.id, clienteId, vendedorId: vendedor?.id || "", vendedorNome: vendedor?.nome || "", data: qs("vendaData").value || getHojeSTR(), quantidade: qtdSolicitada, valorVenda: subtotal, valorFrete, valorTotalPedido: subtotal + valorFrete, custoUnitario, custoTotal: custoUnitario * qtdSolicitada, taxaMaquinetaPercentual, taxaMaquinetaValor, lucroLiquido: subtotal - (custoUnitario * qtdSolicitada) - taxaMaquinetaValor, modalidadeEnvio, formaPagamento: qs("vendaForma").value, statusPedido, codigoRastreio: "", dataRastreio: 0, obs: qs("vendaObs").value.trim() };
   venda.quantidadePendenteFabricacao = Math.max(0, qtdSolicitada - qtdAtual);
   venda.fabricacaoAutomatica = enviarFabricacao;
   venda.origemFabricacao = enviarFabricacao ? "venda" : "";
@@ -1429,6 +1492,7 @@ function salvarVenda() {
   tocarRegistro(joia);
   registrarAuditoria("Venda registrada", `Ref. ${joia.referencia} · ${formatMoeda(getValorTotalPedido(venda))}`);
   salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
   fecharModal("modalVenda");
   fecharModal("modalJoiaDetalhe");
   renderTudo();
@@ -1904,7 +1968,7 @@ function renderPainelResultados() {
     <div class="report-month-title">Consulta de ${escapeHTML(nomeMesLongo(mesRef))}</div>
     <div class="report-hero report-hero-3">
       <div><small>Vendas do mês</small><strong>${formatMoeda(r.receitaMes)}</strong><em>${r.qtdVendidaMes} un. · ${r.vendasMesQtd} venda(s) · ticket médio ${formatMoeda(r.ticketMedioMes)}</em></div>
-      <div><small>Margem do mês</small><strong>${formatMoeda(r.margemRealMes)}</strong><em>${formatDecimal(margemPct,1)}% sobre vendas · custo ${formatMoeda(r.custoVendidoMes)}</em></div>
+      <div><small>Margem do mês</small><strong>${formatMoeda(r.margemRealMes)}</strong><em>${formatDecimal(margemPct,1)}% sobre vendas · custo ${formatMoeda(r.custoVendidoMes)} · maquineta ${formatMoeda(r.taxasMaquinetaMes)}</em></div>
       <div><small>Valor de venda em estoque</small><strong>${formatMoeda(r.vendaEstoque)}</strong><em>${r.estoque} peças · ${formatDecimal(r.pesoEstoque,3)} g de ouro</em></div>
     </div>
     <div class="report-grid wide">
@@ -2031,12 +2095,24 @@ let abaFinanceiroAtual = "abertos";
 function formatarFormulaCusto(joia) {
   const custo = calcularCustoJoia(joia);
   if(!custo.gramas && !custo.indice && !custo.fatorDia) return "Fórmula ainda não preenchida";
-  return `${formatDecimal(custo.gramas, 3)} g × ${formatMoeda(custo.indice)} × ${formatDecimal(custo.fatorDia, 6)} + ${formatDecimal(custo.incidenciaImposto, 2)}% imposto`;
+  const imposto = custo.aplicaImposto && custo.incidenciaImposto > 0 ? ` + ${formatDecimal(custo.incidenciaImposto, 2)}% imposto` : " · sem imposto";
+  const taxa = getTaxaMaquinetaJoia(joia);
+  return `${formatDecimal(custo.gramas, 3)} g × ${formatDecimal(custo.indice, 2)} × ${formatDecimal(custo.fatorDia, 6)}${imposto} · maquineta ${formatDecimal(taxa, 2)}%`;
 }
 function abrirPainelFinanceiroCustos(tab = "abertos") {
   if(!exigirAdministrador()) return;
+  if(qs("taxaMaquinetaPadrao")) qs("taxaMaquinetaPadrao").value = db.configGerais?.taxaMaquinetaPadrao ? formatDecimal(db.configGerais.taxaMaquinetaPadrao, 2) : "";
   trocarAbaFinanceiro(tab);
   abrirModal("modalFinanceiroCustos");
+}
+function salvarTaxaMaquinetaPadrao() {
+  if(!exigirAdministrador()) return;
+  db.configGerais.taxaMaquinetaPadrao = Math.max(0, parseNumeroFlexivel(qs("taxaMaquinetaPadrao")?.value));
+  tocarRegistro(db.configGerais);
+  registrarAuditoria("Taxa da maquineta alterada", `${formatDecimal(db.configGerais.taxaMaquinetaPadrao, 2)}%`);
+  salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
+  renderPainelFinanceiroCustos();
 }
 function trocarAbaFinanceiro(tab = "abertos") {
   abaFinanceiroAtual = ["abertos", "pagos"].includes(tab) ? tab : "abertos";
@@ -2350,6 +2426,7 @@ function salvarUsuarioForm() {
   tocarRegistro(u);
   registrarAuditoria("Usuário salvo", nome);
   salvarBanco();
+  if(db.configs.url) { clearTimeout(syncTimer); void sincronizarFundo(true, true); }
   fecharModal("modalUsuarioForm");
   renderUsuarios();
 }

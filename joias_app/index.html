@@ -13,7 +13,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="style.css?v=0.7">
+  <link rel="stylesheet" href="style.css?v=0.8">
   <title>JoiasPro</title>
 </head>
 <body>
@@ -21,7 +21,7 @@
     <div class="splash-logo" id="splashLogoFallback" style="display:none">◆</div>
     <img id="splashLogoObj" src="assets/nalva-logo.png" alt="Logo" style="display:block; max-height:160px; max-width:210px; object-fit:contain; border-radius:50%;">
     <div class="splash-name" id="splashNome">JoiasPro</div>
-    <div class="splash-version" id="splashVersao">v0.7</div>
+    <div class="splash-version" id="splashVersao">v0.8</div>
     <button class="splash-refresh" onclick="forcarAtualizacao()">🔄 Forçar atualização</button>
   </div>
 
@@ -178,16 +178,22 @@
       <div class="grid-3">
         <div class="form-group"><label>Peso em ouro / gramas</label><input type="text" id="joiaPeso" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,3); atualizarCustoVisualJoia()"></div>
         <div class="form-group somente-admin" id="campoJoiaCompra"><label>Custo usado no lucro</label><input type="text" id="joiaCompra" inputmode="decimal" placeholder="Calculado" readonly></div>
-        <div class="form-group"><label>Preço de venda</label><input type="text" id="joiaVenda" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this)"></div>
+        <div class="form-group"><label>Preço de venda</label><input type="text" id="joiaVenda" inputmode="decimal" placeholder="0,00" oninput="maskMoeda(this); atualizarCustoVisualJoia()"></div>
       </div>
       <section class="cost-formula-card somente-admin" id="campoJoiaCusto">
         <div class="section-title">Cálculo do valor de custo</div>
         <div class="grid-3">
-          <div class="form-group"><label>Índice (R$ / g)</label><input type="text" id="joiaIndiceCusto" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,2); atualizarCustoVisualJoia()"></div>
+          <div class="form-group"><label>Índice (R$ / g)</label><input type="text" id="joiaIndiceCusto" inputmode="decimal" placeholder="Ex.: 1,10" oninput="maskDecimal(this,2); atualizarCustoVisualJoia()"></div>
           <div class="form-group"><label>Fator do dia</label><input type="text" id="joiaFatorDia" inputmode="decimal" placeholder="Ex.: 1,00" oninput="maskDecimal(this,6); atualizarCustoVisualJoia()"></div>
-          <div class="form-group"><label>Incidência de imposto (%)</label><input type="text" id="joiaImposto" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,2); atualizarCustoVisualJoia()"></div>
+          <div class="form-group"><label>Incidência de imposto (%)</label><input type="text" id="joiaImposto" inputmode="decimal" placeholder="Opcional" oninput="maskDecimal(this,2); atualizarCustoVisualJoia()"></div>
         </div>
-        <div class="cost-breakdown"><div><small>Custo base</small><strong id="joiaCustoBase">R$ 0,00</strong></div><div><small>Imposto</small><strong id="joiaValorImposto">R$ 0,00</strong></div><div class="cost-total"><small>Custo calculado</small><strong id="joiaCustoCalculado">0,00</strong></div></div>
+        <div class="grid-2">
+          <label class="check-line"><input type="checkbox" id="joiaAplicarImposto" onchange="atualizarCustoVisualJoia()"><span>Aplicar incidência de imposto ao custo</span></label>
+          <div class="form-group"><label>Taxa da maquineta sobre a venda (%)</label><input type="text" id="joiaTaxaMaquineta" inputmode="decimal" placeholder="Ex.: 3,50" oninput="maskDecimal(this,2); atualizarCustoVisualJoia()"></div>
+        </div>
+        <div class="cost-breakdown"><div><small>Custo base</small><strong id="joiaCustoBase">R$ 0,00</strong></div><div><small>Imposto aplicado</small><strong id="joiaValorImposto">R$ 0,00</strong></div><div><small>Taxa maquineta</small><strong id="joiaValorTaxaMaquineta">R$ 0,00</strong></div><div class="cost-total"><small>Custo calculado</small><strong id="joiaCustoCalculado">R$ 0,00</strong></div></div>
+        <p class="hint" id="joiaFormulaCusto"></p>
+        <div class="cost-fixed-line"><span>Lucro estimado após a maquineta</span><strong id="joiaLucroEstimado">R$ 0,00</strong></div>
         <div class="grid-2">
           <div class="form-group"><label>Situação do pagamento</label><select id="joiaStatusPagamento" onchange="atualizarCustoVisualJoia()"><option value="aberto">Em aberto</option><option value="pago">Pago à vista</option></select></div>
           <div class="form-group"><label>Data do pagamento</label><input type="date" id="joiaDataPagamento" onchange="atualizarCustoVisualJoia()"></div>
@@ -344,7 +350,8 @@
       <div class="modal-title"><span>💰 Financeiro · custos</span><button class="icon-btn" onclick="fecharModal('modalFinanceiroCustos')">✖</button></div>
       <div class="acomp-tabs" role="tablist"><button type="button" class="chip active" data-fin-tab="abertos" onclick="trocarAbaFinanceiro('abertos')">Custos em aberto</button><button type="button" class="chip" data-fin-tab="pagos" onclick="trocarAbaFinanceiro('pagos')">Custos pagos / fixos</button></div>
       <div id="resumoFinanceiroCustos"></div>
-      <p class="hint">O custo em aberto é recalculado pela fórmula gramas × índice × fator do dia + imposto. Ao marcar como pago, o valor fica congelado para calcular o lucro.</p>
+      <p class="hint">O custo em aberto é recalculado pela fórmula gramas × índice × fator do dia. O imposto é opcional; ao marcar como pago, o valor fica congelado para calcular o lucro.</p>
+      <div class="finance-default-box"><div class="form-group"><label>Taxa padrão da maquineta (%)</label><input type="text" id="taxaMaquinetaPadrao" inputmode="decimal" placeholder="0,00" oninput="maskDecimal(this,2)"></div><button class="btn-outline compact" type="button" onclick="salvarTaxaMaquinetaPadrao()">Salvar taxa padrão</button><small>Você pode ajustar a taxa individualmente no cadastro da peça.</small></div>
       <div id="listaFinanceiroCustos" class="client-list"></div>
     </div>
   </div>
@@ -535,6 +542,6 @@
     <div class="photo-lightbox" onclick="fecharModal('modalFoto')"><img id="fotoGrande" alt="Foto da joia"></div>
   </div>
 
-  <script src="app.js?v=0.7" defer></script>
+  <script src="app.js?v=0.8" defer></script>
 </body>
 </html>
